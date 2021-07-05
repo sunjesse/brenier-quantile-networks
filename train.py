@@ -86,20 +86,26 @@ def test(net, args, name):
                 tsr = Y_hat
             else:
                 tsr = torch.cat([tsr, Y_hat], dim=0)
-    #histogram(tsr, name) # uncomment for 1d case
-    plot2d(tsr, name='2d.png') # 2d contour plot
+    histogram(tsr, name) # uncomment for 1d case
+    #plot2d(tsr, name='2d.png') # 2d contour plot
 
 def train(net, optimizer, args):
+    '''
+    Y = np.random.normal(loc=0.0, scale=1.0, size=(args.batch_size, 1))
+    Y = torch.from_numpy(Y)
+    U = np.random.uniform(0, 1, size=(args.batch_size, 1))
+    U = torch.from_numpy(U).float()
+    '''
     #test(net, args, name='untrained.png')
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
         for i in range(args.iters):
             U = np.random.uniform(0, 1, size=(args.batch_size, args.dims))
-            #Y = np.random.normal(loc=args.mean, scale=args.std, size=(args.batch_size, args.dims))
+            Y = np.random.normal(loc=args.mean, scale=args.std, size=(args.batch_size, args.dims))
             #Y = np.random.exponential(scale=1.0, size=(args.batch_size, 1))
             #Y = gaussian_mixture(means=[-3, 1, 8], stds=[0.5, 0.5, 0.5], p=[0.1, 0.6, 0.3], args=args)
-            cov = np.array([[3, -2], [-2, 5]])
-            Y = np.random.multivariate_normal(mean=[2, 3], cov=cov)
+            #cov = np.array([[3, -2], [-2, 5]])
+            #Y = np.random.multivariate_normal(mean=[2, 3], cov=cov)
             U, Y = torch.from_numpy(U).float(), torch.from_numpy(Y)
             optimizer.zero_grad()
             Y_hat = net(U)
@@ -111,11 +117,10 @@ def train(net, optimizer, args):
             running_loss += loss.item()
 
         print('%.5f' %
-			(running_loss/args.iters))
+              (running_loss/args.iters))
     test(net, args, name='trained.png')
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser()
     # optimization related arguments
     parser.add_argument('--batch_size', default=128, type=int,
