@@ -90,12 +90,6 @@ def test(net, args, name):
     plot2d(tsr, name='2d.png') # 2d contour plot
 
 def train(net, optimizer, args):
-    '''
-    Y = np.random.normal(loc=0.0, scale=1.0, size=(args.batch_size, 1))
-    Y = torch.from_numpy(Y)
-    U = np.random.uniform(0, 1, size=(args.batch_size, 1))
-    U = torch.from_numpy(U).float()
-    '''
     #test(net, args, name='untrained.png')
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
