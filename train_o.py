@@ -85,58 +85,55 @@ def test(net, args, name):
     tsr = None
     with torch.no_grad():
         for i in range(100): # get args.batch_size x 100 samples
-            U = np.random.uniform(0, 1, size=(args.batch_size, args.dims, 1))
+            U = np.random.uniform(0, 1, size=(args.batch_size, args.dims))
             U = torch.from_numpy(U).float()
-            Y_hat = net(U)[0].squeeze(-1)
+            Y_hat = net(U)
             if tsr == None:
                 tsr = Y_hat
             else:
                 tsr = torch.cat([tsr, Y_hat], dim=0)
-    #histogram(tsr, name) # uncomment for 1d case
-    plot2d(tsr, name='imgs/2d.png') # 2d contour plot
-    plotaxis(tsr, name='imgs/train')
+    histogram(tsr, name) # uncomment for 1d case
+    #plot2d(tsr, name='imgs/2d.png') # 2d contour plot
+    #plotaxis(tsr, name='imgs/train')
 
 def train(net, optimizer, args):
-    '''
-    Y = np.random.normal(loc=0.0, scale=1.0, size=(args.batch_size, 1))
-    Y = torch.from_numpy(Y)
-    U = np.random.uniform(0, 1, size=(args.batch_size, 1))
-    U = torch.from_numpy(U).float()
-    '''
-    #test(net, args, name='untrained.png')
+    n = 10
+    m = 10
+    loss = 0
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
-        for i in range(args.iters):
-            U = np.random.uniform(0, 1, size=(args.batch_size, args.dims, 1))
+        optimizer.zero_grad()
+        for i in range(n):
             #Y = np.random.normal(loc=args.mean, scale=args.std, size=(args.batch_size, args.dims))
-            #Y = np.random.exponential(scale=1.0, size=(args.batch_size, 1))
-            #Y = gaussian_mixture(means=[-3, 1, 8], stds=[0.5, 0.5, 0.5], p=[0.1, 0.6, 0.3], args=args)
-            Y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(args.batch_size))
-            U, Y = torch.from_numpy(U).float(), torch.from_numpy(Y)
-            optimizer.zero_grad()
-            #print(U.shape, Y.shape)
-            Y_hat = net(U)[0].squeeze(-1)
-            loss = huber_quantile_loss(Y_hat, Y, U.squeeze(-1), reduce=False)
-            loss = loss.mean()
-            loss.backward()
-            optimizer.step()
-
-            running_loss += loss.item()
-
-        print('%.5f' %
-              (running_loss/args.iters))
+            Y = gaussian_mixture(means=[-3, 1, 8], stds=[0.5, 0.5, 0.5], p=[0.1, 0.6, 0.3], args=args)
+            Y = torch.from_numpy(Y)
+            for j in range(m):
+                U = np.random.uniform(0, 1, size=(args.batch_size, args.dims))
+                U = torch.from_numpy(U).float()
+                Y_hat = net(U)
+                loss += huber_quantile_loss(Y_hat, Y, U, reduce=True)
+        loss /= m*n
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item()
+        loss = 0
+        if epoch % (args.epoch//10) == 0:
+            print('%.5f' %
+                  (running_loss/args.iters))
     test(net, args, name='imgs/trained.png')
+    '''
     Y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(args.batch_size*100))
     Y = torch.from_numpy(Y)
     plotaxis(Y, name='imgs/theor')
     plot2d(Y, name='imgs/theor.png')
+    '''
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # optimization related arguments
     parser.add_argument('--batch_size', default=128, type=int,
                         help='input batch size')
-    parser.add_argument('--epoch', default=50, type=int,
+    parser.add_argument('--epoch', default=10000, type=int,
                         help='epochs to train for')
     parser.add_argument('--optimizer', default='adam', help='optimizer')
     parser.add_argument('--lr', default=0.005, type=float, help='LR')
@@ -156,8 +153,8 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     #trainloader, testloader = dataloader(args)
-    #net = QNN(args)
-    net = torch.nn.RNN(input_size=1, hidden_size=1, num_layers=1, nonlinearity='relu')
+    net = QNN(args)
+    #net = torch.nn.RNN(input_size=1, hidden_size=1, num_layers=1, nonlinearity='relu')
     #criterion = nn.CrossEntropyLoss()
     optimizer = optimizer(net, args)
     train(net, optimizer, args)

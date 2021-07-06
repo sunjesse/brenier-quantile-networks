@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
 import torch.optim as optim
+from torch.utils import data
 import argparse
 import numpy as np
 import scipy
@@ -16,6 +17,19 @@ from scipy.stats import norm
 from lib import radam
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+class Synthetic(data.Dataset):
+    def __init__(self, m=100, n=1000):
+        self.m = m
+        self.n = n
+        self.u = np.random.uniform(0, 1, size=(self.m))
+        self.u = torch.from_numpy(self.u).float()
+        self.y = np.random.normal(loc=args.mean, scale=args.std, size=(self.n, 1))
+    def __len__(self):
+        return self.n
+
+    def __getitem__(self, i):
+        return torch.from_numpy(self.y[i]), self.u
 
 class QNN(nn.Module):
     def __init__(self, args):
@@ -84,57 +98,49 @@ def test(net, args, name):
     net.eval()
     tsr = None
     with torch.no_grad():
-        for i in range(100): # get args.batch_size x 100 samples
-            U = np.random.uniform(0, 1, size=(args.batch_size, args.dims, 1))
+        for i in range(10000): # get args.batch_size x 100 samples
+            U = np.random.uniform(0, 1, size=(1, args.dims))
             U = torch.from_numpy(U).float()
-            Y_hat = net(U)[0].squeeze(-1)
+            Y_hat = net(U)
             if tsr == None:
                 tsr = Y_hat
             else:
                 tsr = torch.cat([tsr, Y_hat], dim=0)
-    #histogram(tsr, name) # uncomment for 1d case
-    plot2d(tsr, name='imgs/2d.png') # 2d contour plot
-    plotaxis(tsr, name='imgs/train')
+    histogram(tsr, name) # uncomment for 1d case
+    #plot2d(tsr, name='imgs/2d.png') # 2d contour plot
+    #plotaxis(tsr, name='imgs/train')
 
-def train(net, optimizer, args):
-    '''
-    Y = np.random.normal(loc=0.0, scale=1.0, size=(args.batch_size, 1))
-    Y = torch.from_numpy(Y)
-    U = np.random.uniform(0, 1, size=(args.batch_size, 1))
-    U = torch.from_numpy(U).float()
-    '''
-    #test(net, args, name='untrained.png')
+def train(net, optimizer, loader, args):
+    loss = 0
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
-        for i in range(args.iters):
-            U = np.random.uniform(0, 1, size=(args.batch_size, args.dims, 1))
-            #Y = np.random.normal(loc=args.mean, scale=args.std, size=(args.batch_size, args.dims))
-            #Y = np.random.exponential(scale=1.0, size=(args.batch_size, 1))
-            #Y = gaussian_mixture(means=[-3, 1, 8], stds=[0.5, 0.5, 0.5], p=[0.1, 0.6, 0.3], args=args)
-            Y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(args.batch_size))
-            U, Y = torch.from_numpy(U).float(), torch.from_numpy(Y)
-            optimizer.zero_grad()
-            #print(U.shape, Y.shape)
-            Y_hat = net(U)[0].squeeze(-1)
-            loss = huber_quantile_loss(Y_hat, Y, U.squeeze(-1), reduce=False)
-            loss = loss.mean()
+        optimizer.zero_grad()
+        for idx, batch in enumerate(loader):
+            Y, U = batch
+            for j in range(args.m):
+                u = U[:, j].unsqueeze(-1)
+                Y_hat = net(u)
+                loss += huber_quantile_loss(Y_hat, Y, u, reduce=True)
+            loss /= args.m
             loss.backward()
             optimizer.step()
-
             running_loss += loss.item()
+            loss = 0
 
         print('%.5f' %
-              (running_loss/args.iters))
+        (running_loss/args.iters))
     test(net, args, name='imgs/trained.png')
+    '''
     Y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(args.batch_size*100))
     Y = torch.from_numpy(Y)
     plotaxis(Y, name='imgs/theor')
     plot2d(Y, name='imgs/theor.png')
+    '''
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # optimization related arguments
-    parser.add_argument('--batch_size', default=128, type=int,
+    parser.add_argument('--batch_size', default=64, type=int,
                         help='input batch size')
     parser.add_argument('--epoch', default=50, type=int,
                         help='epochs to train for')
@@ -148,7 +154,8 @@ if __name__ == "__main__":
     parser.add_argument('--mean', default=0, type=int)
     parser.add_argument('--std', default=1, type=int)
     parser.add_argument('--dims', default=1, type=int)
-
+    parser.add_argument('--m', default=1000, type=int)
+    parser.add_argument('--n', default=1000, type=int)
     args = parser.parse_args()
 
     print("Input arguments:")
@@ -156,10 +163,12 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     #trainloader, testloader = dataloader(args)
-    #net = QNN(args)
-    net = torch.nn.RNN(input_size=1, hidden_size=1, num_layers=1, nonlinearity='relu')
+    net = QNN(args)
+    ds = Synthetic(m=args.m, n=args.n)
+    loader = data.DataLoader(ds, batch_size=args.batch_size)
+    #net = torch.nn.RNN(input_size=1, hidden_size=1, num_layers=1, nonlinearity='relu')
     #criterion = nn.CrossEntropyLoss()
     optimizer = optimizer(net, args)
-    train(net, optimizer, args)
+    train(net, optimizer, loader, args)
     #test(net, criterion, testloader, args)
     print("Training completed!")
