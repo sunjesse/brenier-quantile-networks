@@ -25,7 +25,7 @@ class Synthetic(data.Dataset):
         #self.y = np.random.normal(loc=args.mean, scale=args.std, size=(args.batch_size, args.dims))
         #self.y = np.random.exponential(scale=1.0, size=(args.batch_size, 1))
         #self.y = gaussian_mixture(means=[-3, 1, 8], stds=[0.5, 0.5, 0.5], p=[0.1, 0.6, 0.3], args=args)
-        self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n, 1))
+        self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
 
     def __len__(self):
         return self.n
