@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
 import torch.optim as optim
+from torch.utils import data
 import argparse
 import numpy as np
 import scipy
@@ -16,6 +17,21 @@ from scipy.stats import norm
 from lib import radam
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+class Synthetic(data.Dataset):
+    def __init__(self, args,  n=1000):
+        self.n = n
+        #self.y = np.random.normal(loc=args.mean, scale=args.std, size=(self.n, 1))
+        #self.y = np.random.normal(loc=args.mean, scale=args.std, size=(args.batch_size, args.dims))
+        #self.y = np.random.exponential(scale=1.0, size=(args.batch_size, 1))
+        #self.y = gaussian_mixture(means=[-3, 1, 8], stds=[0.5, 0.5, 0.5], p=[0.1, 0.6, 0.3], args=args)
+        self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n, 1))
+
+    def __len__(self):
+        return self.n
+
+    def __getitem__(self, i):
+        return torch.from_numpy(self.y[i])
 
 class QNN(nn.Module):
     def __init__(self, args):
@@ -53,10 +69,10 @@ def gaussian_mixture(means, stds, p, args):
     ranges = [0.]
     for i in range(k):
         ranges.append(ranges[i] + p[i])
-    mix = np.zeros((args.batch_size, 1))
-    idx = np.random.uniform(0, 1, size=(args.batch_size, 1))
+    mix = np.zeros((args.n, 1))
+    idx = np.random.uniform(0, 1, size=(args.n, 1))
     for i in range(k):
-        g = np.random.normal(loc=means[i], scale=stds[i], size=(args.batch_size, 1))
+        g = np.random.normal(loc=means[i], scale=stds[i], size=(args.n, 1))
         indices = np.logical_and(idx >= ranges[i], idx < ranges[i+1])
         mix[indices] = g[indices]
     return mix
@@ -85,9 +101,10 @@ def test(net, args, name):
     tsr = None
     with torch.no_grad():
         for i in range(100): # get args.batch_size x 100 samples
-            U = np.random.uniform(0, 1, size=(args.batch_size, args.dims, 1))
-            U = torch.from_numpy(U).float()
-            Y_hat = net(U)[0].squeeze(-1)
+            #U = np.random.uniform(0, 1, size=(1, args.dims))
+            #U = torch.from_numpy(U).float()
+            U = torch.rand(size=(args.batch_size, args.dims))
+            Y_hat = net(U)
             if tsr == None:
                 tsr = Y_hat
             else:
@@ -96,40 +113,33 @@ def test(net, args, name):
     plot2d(tsr, name='imgs/2d.png') # 2d contour plot
     plotaxis(tsr, name='imgs/train')
 
-def train(net, optimizer, args):
-    '''
-    Y = np.random.normal(loc=0.0, scale=1.0, size=(args.batch_size, 1))
-    Y = torch.from_numpy(Y)
-    U = np.random.uniform(0, 1, size=(args.batch_size, 1))
-    U = torch.from_numpy(U).float()
-    '''
-    #test(net, args, name='untrained.png')
+def train(net, optimizer, loader, args):
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
-        for i in range(args.iters):
-            U = np.random.uniform(0, 1, size=(args.batch_size, args.dims, 1))
-            #Y = np.random.normal(loc=args.mean, scale=args.std, size=(args.batch_size, args.dims))
-            #Y = np.random.exponential(scale=1.0, size=(args.batch_size, 1))
-            #Y = gaussian_mixture(means=[-3, 1, 8], stds=[0.5, 0.5, 0.5], p=[0.1, 0.6, 0.3], args=args)
-            Y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(args.batch_size))
-            U, Y = torch.from_numpy(U).float(), torch.from_numpy(Y)
+        for idx, batch in enumerate(loader):
             optimizer.zero_grad()
-            #print(U.shape, Y.shape)
-            Y_hat = net(U)[0].squeeze(-1)
-            loss = huber_quantile_loss(Y_hat, Y, U.squeeze(-1), reduce=False)
-            loss = loss.mean()
+            loss = 0
+            Y = batch
+            for j in range(args.m):
+                #u = np.random.uniform(0, 1, size=(args.batch_size, 1))#U[:, j].unsqueeze(-1)
+                #u = torch.from_numpy(u).float()
+                u = torch.rand(size=(args.batch_size, args.dims))
+                Y_hat = net(u)
+                loss += huber_quantile_loss(Y_hat, Y, u, reduce=True)
+            loss /= args.m
             loss.backward()
             optimizer.step()
-
             running_loss += loss.item()
 
         print('%.5f' %
-              (running_loss/args.iters))
+        (running_loss/args.iters))
     test(net, args, name='imgs/trained.png')
+    '''
     Y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(args.batch_size*100))
     Y = torch.from_numpy(Y)
     plotaxis(Y, name='imgs/theor')
     plot2d(Y, name='imgs/theor.png')
+    '''
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -148,7 +158,8 @@ if __name__ == "__main__":
     parser.add_argument('--mean', default=0, type=int)
     parser.add_argument('--std', default=1, type=int)
     parser.add_argument('--dims', default=1, type=int)
-
+    parser.add_argument('--m', default=10, type=int)
+    parser.add_argument('--n', default=10000, type=int)
     args = parser.parse_args()
 
     print("Input arguments:")
@@ -156,10 +167,12 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     #trainloader, testloader = dataloader(args)
-    #net = QNN(args)
-    net = torch.nn.RNN(input_size=1, hidden_size=1, num_layers=1, nonlinearity='relu')
+    net = QNN(args)
+    ds = Synthetic(args, n=args.n)
+    loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    #net = torch.nn.RNN(input_size=1, hidden_size=1, num_layers=1, nonlinearity='relu')
     #criterion = nn.CrossEntropyLoss()
     optimizer = optimizer(net, args)
-    train(net, optimizer, args)
+    train(net, optimizer, loader, args)
     #test(net, criterion, testloader, args)
     print("Training completed!")
