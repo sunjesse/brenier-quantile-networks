@@ -19,17 +19,17 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 class Synthetic(data.Dataset):
-    def __init__(self, m=100, n=1000):
+    def __init__(self, args,  m=100, n=1000):
         self.m = m
         self.n = n
-        self.u = np.random.uniform(0, 1, size=(self.m))
-        self.u = torch.from_numpy(self.u).float()
+        #self.u = np.random.uniform(0, 1, size=(self.m))
+        #self.u = torch.from_numpy(self.u).float()
         self.y = np.random.normal(loc=args.mean, scale=args.std, size=(self.n, 1))
     def __len__(self):
         return self.n
 
     def __getitem__(self, i):
-        return torch.from_numpy(self.y[i]), self.u
+        return torch.from_numpy(self.y[i])#, self.u
 
 class QNN(nn.Module):
     def __init__(self, args):
@@ -99,8 +99,9 @@ def test(net, args, name):
     tsr = None
     with torch.no_grad():
         for i in range(10000): # get args.batch_size x 100 samples
-            U = np.random.uniform(0, 1, size=(1, args.dims))
-            U = torch.from_numpy(U).float()
+            #U = np.random.uniform(0, 1, size=(1, args.dims))
+            #U = torch.from_numpy(U).float()
+            U = torch.rand(size=(args.batch_size, 1))
             Y_hat = net(U)
             if tsr == None:
                 tsr = Y_hat
@@ -111,21 +112,22 @@ def test(net, args, name):
     #plotaxis(tsr, name='imgs/train')
 
 def train(net, optimizer, loader, args):
-    loss = 0
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
-        optimizer.zero_grad()
         for idx, batch in enumerate(loader):
-            Y, U = batch
+            optimizer.zero_grad()
+            loss = 0
+            Y = batch
             for j in range(args.m):
-                u = U[:, j].unsqueeze(-1)
+                #u = np.random.uniform(0, 1, size=(args.batch_size, 1))#U[:, j].unsqueeze(-1)
+                #u = torch.from_numpy(u).float()
+                u = torch.rand(size=(args.batch_size, 1))
                 Y_hat = net(u)
                 loss += huber_quantile_loss(Y_hat, Y, u, reduce=True)
             loss /= args.m
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
-            loss = 0
 
         print('%.5f' %
         (running_loss/args.iters))
@@ -140,7 +142,7 @@ def train(net, optimizer, loader, args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # optimization related arguments
-    parser.add_argument('--batch_size', default=64, type=int,
+    parser.add_argument('--batch_size', default=128, type=int,
                         help='input batch size')
     parser.add_argument('--epoch', default=50, type=int,
                         help='epochs to train for')
@@ -154,8 +156,8 @@ if __name__ == "__main__":
     parser.add_argument('--mean', default=0, type=int)
     parser.add_argument('--std', default=1, type=int)
     parser.add_argument('--dims', default=1, type=int)
-    parser.add_argument('--m', default=1000, type=int)
-    parser.add_argument('--n', default=1000, type=int)
+    parser.add_argument('--m', default=10000, type=int)
+    parser.add_argument('--n', default=10000, type=int)
     args = parser.parse_args()
 
     print("Input arguments:")
@@ -164,8 +166,8 @@ if __name__ == "__main__":
 
     #trainloader, testloader = dataloader(args)
     net = QNN(args)
-    ds = Synthetic(m=args.m, n=args.n)
-    loader = data.DataLoader(ds, batch_size=args.batch_size)
+    ds = Synthetic(args, m=args.m, n=args.n)
+    loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
     #net = torch.nn.RNN(input_size=1, hidden_size=1, num_layers=1, nonlinearity='relu')
     #criterion = nn.CrossEntropyLoss()
     optimizer = optimizer(net, args)
