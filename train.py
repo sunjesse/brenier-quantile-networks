@@ -17,6 +17,9 @@ from scipy.stats import norm
 from lib import radam
 import matplotlib.pyplot as plt
 import seaborn as sns
+import rp
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class Synthetic(data.Dataset):
     def __init__(self, args,  n=1000):
@@ -96,6 +99,11 @@ def huber_quantile_loss(output, target, tau, k=0.02, reduce=True):
     loss = (tau - (u.detach() <= 0).float()).mul_(u.detach().abs().clamp(max=k).div_(k)).mul_(u)
     return loss.mean() if reduce else loss
 
+def w_quantile_loss(output, target, tau, W, reduce=True):
+    u = target - output
+    loss = torch.matmul(u, W)*torch.matmul(tau - (u<0).float(), W.float())
+    return loss.mean() if reduce else loss
+
 def test(net, args, name):
     net.eval()
     tsr = None
@@ -114,17 +122,25 @@ def test(net, args, name):
     plotaxis(tsr, name='imgs/train')
 
 def train(net, optimizer, loader, args):
+    #W = rp.gen_random_projection(d=args.dims).permute(1, 0).double()
+    W1 = torch.rand(size=(1, 100))
+    W2 = 1 - W1
+    W = torch.cat([W1, W2], dim=0)
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
         for idx, batch in enumerate(loader):
             optimizer.zero_grad()
             loss = 0
             Y = batch
+            Y = torch.mean(torch.matmul(Y, W.double()), dim=1).unsqueeze(1)
             for j in range(args.m):
                 #u = np.random.uniform(0, 1, size=(args.batch_size, 1))#U[:, j].unsqueeze(-1)
                 #u = torch.from_numpy(u).float()
                 u = torch.rand(size=(args.batch_size, args.dims))
                 Y_hat = net(u)
+                if args.dims > 1:
+                    Y_hat = torch.mean(torch.matmul(Y_hat, W), dim=1).unsqueeze(1)
+                    u = torch.mean(torch.matmul(u, W), dim=1).unsqueeze(1)
                 loss += huber_quantile_loss(Y_hat, Y, u, reduce=True)
             loss /= args.m
             loss.backward()
@@ -157,7 +173,7 @@ if __name__ == "__main__":
     parser.add_argument('--iters', default=1000, type=int)
     parser.add_argument('--mean', default=0, type=int)
     parser.add_argument('--std', default=1, type=int)
-    parser.add_argument('--dims', default=1, type=int)
+    parser.add_argument('--dims', default=2, type=int)
     parser.add_argument('--m', default=10, type=int)
     parser.add_argument('--n', default=10000, type=int)
     args = parser.parse_args()

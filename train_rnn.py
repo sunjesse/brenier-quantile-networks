@@ -18,6 +18,8 @@ from lib import radam
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 class Synthetic(data.Dataset):
     def __init__(self, args,  n=1000):
         self.n = n
@@ -46,16 +48,28 @@ class QNN(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-class DeepRNN(nn.Module):
-    def __init__(self, args):
-        super(DeepRNN, self).__init__()
-        self.r1 = nn.RNN(input_size=1, hidden_size=128, num_layers=1, nonlinearity='tanh')
-        self.r2 = nn.RNN(input_size=128, hidden_size=1, num_layers=1, nonlinearity='tanh')
+class RNN(nn.Module):
+    def __init__(self, input_size=1, hidden_size=128, num_layers=2, num_classes=2):
+        super(RNN, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+        self.fc1 = nn.Linear(hidden_size, 1)
+        self.fc2 = nn.Linear(hidden_size, 1)
 
     def forward(self, x):
-        o1, hn1 = self.r1(x)
-        o2, hn2 = self.r2(o1)
-        return o2
+        # Set initial hidden and cell states 
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(device) 
+        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(device)
+        
+        # Forward propagate LSTM
+        out, _ = self.lstm(x, (h0, c0))  # out: tensor of shape (batch_size, seq_length, hidden_size)
+        
+        # Decode the hidden state of the last time step
+        out1 = self.fc1(out[:, 0, :])
+        out2 = self.fc2(out[:, -1, :])
+        out = torch.cat([out1, out2], dim=-1)
+        return out
 
 def plot2d(Y, name):
     Y = Y.detach().cpu().numpy()
@@ -113,8 +127,8 @@ def test(net, args, name):
     with torch.no_grad():
         for i in range(100): # get args.batch_size x 100 samples
             U = np.random.uniform(0, 1, size=(args.batch_size, args.dims, 1))
-            U = torch.from_numpy(U).float()
-            Y_hat = net(U).squeeze(-1)
+            U = torch.from_numpy(U).float().cuda()
+            Y_hat = net(U).squeeze(-1).cuda()
             if tsr == None:
                 tsr = Y_hat
             else:
@@ -130,12 +144,13 @@ def train(net, optimizer, loader, args):
         for idx, batch in enumerate(loader):
             optimizer.zero_grad()
             loss = 0
-            Y = batch
+            Y = batch.cuda()
             for j in range(args.m):
                 #u = np.random.uniform(0, 1, size=(args.batch_size, 1))#U[:, j].unsqueeze(-1)
                 #u = torch.from_numpy(u).float()
-                u = torch.rand(size=(args.batch_size, args.dims, 1))
-                Y_hat = net(u).squeeze(-1)
+                u = torch.rand(size=(args.batch_size, args.dims, 1)).cuda()
+                Y_hat = net(u)
+                #print(u.shape, Y_hat.shape, Y.shape)
                 loss += huber_quantile_loss(Y_hat, Y, u.squeeze(-1), reduce=True)
             loss /= args.m
             loss.backward()
@@ -168,7 +183,7 @@ if __name__ == "__main__":
     parser.add_argument('--iters', default=1000, type=int)
     parser.add_argument('--mean', default=0, type=int)
     parser.add_argument('--std', default=1, type=int)
-    parser.add_argument('--dims', default=1, type=int)
+    parser.add_argument('--dims', default=2, type=int)
     parser.add_argument('--m', default=10, type=int)
     parser.add_argument('--n', default=10000, type=int)
 
@@ -180,7 +195,7 @@ if __name__ == "__main__":
 
     #trainloader, testloader = dataloader(args)
     #net = QNN(args)
-    net = DeepRNN(args)
+    net = RNN().cuda()
     ds = Synthetic(args, n=args.n)
     loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
     #criterion = nn.CrossEntropyLoss()
