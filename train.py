@@ -97,7 +97,11 @@ def criterion(pred, label, quantile):
 def huber_quantile_loss(output, target, tau, k=0.02, reduce=True):
     u = target - output
     loss = (tau - (u.detach() <= 0).float()).mul_(u.detach().abs().clamp(max=k).div_(k)).mul_(u)
-    return loss.mean() if reduce else loss
+    cl = torch.abs(torch.sum(output, dim=1)-torch.sum(target, dim=1))
+    if reduce == False:
+        return loss #+ cl
+    else:
+        return loss.mean() #+ 0.03*cl.mean()
 
 def w_quantile_loss(output, target, tau, W, reduce=True):
     u = target - output
@@ -123,24 +127,26 @@ def test(net, args, name):
 
 def train(net, optimizer, loader, args):
     #W = rp.gen_random_projection(d=args.dims).permute(1, 0).double()
-    W1 = torch.rand(size=(1, 100))
-    W2 = 1 - W1
-    W = torch.cat([W1, W2], dim=0)
+    #W1 = torch.rand(size=(1, 100))
+    #W2 = 1 - W1
+    #W = torch.cat([W1, W2], dim=0)
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
         for idx, batch in enumerate(loader):
             optimizer.zero_grad()
             loss = 0
             Y = batch
-            Y = torch.mean(torch.matmul(Y, W.double()), dim=1).unsqueeze(1)
+            #Y = torch.mean(torch.matmul(Y, W.double()), dim=1).unsqueeze(1)
             for j in range(args.m):
                 #u = np.random.uniform(0, 1, size=(args.batch_size, 1))#U[:, j].unsqueeze(-1)
                 #u = torch.from_numpy(u).float()
                 u = torch.rand(size=(args.batch_size, args.dims))
                 Y_hat = net(u)
+                '''
                 if args.dims > 1:
                     Y_hat = torch.mean(torch.matmul(Y_hat, W), dim=1).unsqueeze(1)
                     u = torch.mean(torch.matmul(u, W), dim=1).unsqueeze(1)
+                '''
                 loss += huber_quantile_loss(Y_hat, Y, u, reduce=True)
             loss /= args.m
             loss.backward()
