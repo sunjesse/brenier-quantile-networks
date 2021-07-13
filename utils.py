@@ -8,3 +8,9 @@ def gen_random_projection(M=100, d=2): # generates M samples of dimension d on a
     z = np.concatenate([z, z], axis=1)
     W /= z + 1E-5
     return torch.from_numpy(W).float()
+
+def cov(X):
+    D = X.shape[-1]
+    mean = torch.mean(X, dim=-1).unsqueeze(-1)
+    X = X - mean
+    return 1/(D-1) * X @ X.transpose(-1, -2)

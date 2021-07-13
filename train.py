@@ -17,7 +17,7 @@ from scipy.stats import norm
 from lib import radam
 import matplotlib.pyplot as plt
 import seaborn as sns
-import rp
+import utils
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -27,7 +27,11 @@ class Synthetic(data.Dataset):
         #self.y = np.random.normal(loc=args.mean, scale=args.std, size=(self.n, 1))
         #self.y = np.random.normal(loc=args.mean, scale=args.std, size=(args.batch_size, args.dims))
         #self.y = np.random.exponential(scale=1.0, size=(args.batch_size, 1))
-        #self.y = gaussian_mixture(means=[-3, 1, 8], stds=[0.5, 0.5, 0.5], p=[0.1, 0.6, 0.3], args=args)
+        '''
+        self.y1 = gaussian_mixture(means=[-3, 1, 8], stds=[0.5, 0.5, 0.5], p=[0.1, 0.6, 0.3], args=args)
+        self.y2 = gaussian_mixture(means=[-3, 1, 8], stds=[0.5, 0.5, 0.5], p=[0.1, 0.6, 0.3], args=args)
+        self.y = np.concatenate([self.y1, self.y2], axis=1)
+        '''
         self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
 
     def __len__(self):
@@ -97,16 +101,23 @@ def criterion(pred, label, quantile):
 def huber_quantile_loss(output, target, tau, k=0.02, reduce=True):
     u = target - output
     loss = (tau - (u.detach() <= 0).float()).mul_(u.detach().abs().clamp(max=k).div_(k)).mul_(u)
-    cl = torch.abs(torch.sum(output, dim=1)-torch.sum(target, dim=1))
-    if reduce == False:
-        return loss #+ cl
-    else:
-        return loss.mean() #+ 0.03*cl.mean()
+    #cl = torch.abs(torch.sum(output, dim=1)-torch.sum(target, dim=1))
+    # covariance difference norm loss
+    cl = utils.cov(output.permute(-1,-2)) - utils.cov(target.permute(-1,-2))
+    cl = torch.norm(cl, p=2)
+    return loss.mean() + 0.01*cl #+ 0.03*cl.mean()
 
 def w_quantile_loss(output, target, tau, W, reduce=True):
     u = target - output
     loss = torch.matmul(u, W)*torch.matmul(tau - (u<0).float(), W.float())
     return loss.mean() if reduce else loss
+
+def l2_loss(output, target, tau):
+    # assume tau univariate
+    u = target - output
+    loss = torch.abs(u) + (2*tau - 1)*u
+    loss = torch.norm(loss, p=2, dim=1)
+    return loss.mean()
 
 def test(net, args, name):
     net.eval()
@@ -115,7 +126,7 @@ def test(net, args, name):
         for i in range(100): # get args.batch_size x 100 samples
             #U = np.random.uniform(0, 1, size=(1, args.dims))
             #U = torch.from_numpy(U).float()
-            U = torch.rand(size=(args.batch_size, args.dims))
+            U = torch.rand(size=(args.batch_size, 2))
             Y_hat = net(U)
             if tsr == None:
                 tsr = Y_hat
@@ -126,7 +137,8 @@ def test(net, args, name):
     plotaxis(tsr, name='imgs/train')
 
 def train(net, optimizer, loader, args):
-    #W = rp.gen_random_projection(d=args.dims).permute(1, 0).double()
+    k = 10
+    #W = utils.gen_random_projection(M=k, d=args.dims).permute(1, 0)
     #W1 = torch.rand(size=(1, 100))
     #W2 = 1 - W1
     #W = torch.cat([W1, W2], dim=0)
@@ -138,16 +150,18 @@ def train(net, optimizer, loader, args):
             Y = batch
             #Y = torch.mean(torch.matmul(Y, W.double()), dim=1).unsqueeze(1)
             for j in range(args.m):
-                #u = np.random.uniform(0, 1, size=(args.batch_size, 1))#U[:, j].unsqueeze(-1)
-                #u = torch.from_numpy(u).float()
-                u = torch.rand(size=(args.batch_size, args.dims))
+                #for r in range(k):
+                u = torch.rand(size=(args.batch_size, 2))
+                #x = torch.ones(args.batch_size, args.dims) * W[:, r]
+                #x = torch.cat([u, x], dim=1)
                 Y_hat = net(u)
                 '''
                 if args.dims > 1:
                     Y_hat = torch.mean(torch.matmul(Y_hat, W), dim=1).unsqueeze(1)
-                    u = torch.mean(torch.matmul(u, W), dim=1).unsqueeze(1)
+                #u = torch.mean(torch.matmul(u, W), dim=1).unsqueeze(1)
                 '''
                 loss += huber_quantile_loss(Y_hat, Y, u, reduce=True)
+                #loss += l2_loss(Y_hat, Y, u)
             loss /= args.m
             loss.backward()
             optimizer.step()
