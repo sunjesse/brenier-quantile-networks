@@ -17,6 +17,7 @@ from scipy.stats import norm
 from lib import radam
 import matplotlib.pyplot as plt
 import seaborn as sns
+import utils
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -49,7 +50,7 @@ class QNN(nn.Module):
         return self.net(x)
 
 class RNN(nn.Module):
-    def __init__(self, input_size=1, hidden_size=128, num_layers=2, num_classes=2):
+    def __init__(self, input_size=1, hidden_size=128, num_layers=1, num_classes=2):
         super(RNN, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -119,7 +120,9 @@ def criterion(pred, label, quantile):
 def huber_quantile_loss(output, target, tau, k=0.02, reduce=True):
     u = target - output
     loss = (tau - (u.detach() <= 0).float()).mul_(u.detach().abs().clamp(max=k).div_(k)).mul_(u)
-    return loss.mean() if reduce else loss
+    #cl = utils.cov(output.permute(-1,-2)) - utils.cov(target.permute(-1,-2))
+    #cl = torch.norm(cl, p=1)
+    return loss.mean() #+ 0.01*cl
 
 def test(net, args, name):
     net.eval()

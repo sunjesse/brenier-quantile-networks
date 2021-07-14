@@ -99,13 +99,16 @@ def criterion(pred, label, quantile):
     return torch.mean(loss)
 
 def huber_quantile_loss(output, target, tau, k=0.02, reduce=True):
+    #tau = torch.norm(tau, p=2, dim=1).unsqueeze(-1)/1.42
     u = target - output
     loss = (tau - (u.detach() <= 0).float()).mul_(u.detach().abs().clamp(max=k).div_(k)).mul_(u)
+    loss = torch.abs(loss)
     #cl = torch.abs(torch.sum(output, dim=1)-torch.sum(target, dim=1))
+
     # covariance difference norm loss
-    cl = utils.cov(output.permute(-1,-2)) - utils.cov(target.permute(-1,-2))
-    cl = torch.norm(cl, p=2)
-    return loss.mean() + 0.01*cl #+ 0.03*cl.mean()
+    #cl = utils.cov(output.permute(-1,-2)) - utils.cov(target.permute(-1,-2))
+    #cl = torch.norm(cl, p=2)
+    return loss.mean() #+ 0.01*cl
 
 def w_quantile_loss(output, target, tau, W, reduce=True):
     u = target - output
@@ -126,7 +129,7 @@ def test(net, args, name):
         for i in range(100): # get args.batch_size x 100 samples
             #U = np.random.uniform(0, 1, size=(1, args.dims))
             #U = torch.from_numpy(U).float()
-            U = torch.rand(size=(args.batch_size, 2))
+            U = torch.rand(size=(args.batch_size, args.dims))
             Y_hat = net(U)
             if tsr == None:
                 tsr = Y_hat
@@ -137,8 +140,8 @@ def test(net, args, name):
     plotaxis(tsr, name='imgs/train')
 
 def train(net, optimizer, loader, args):
-    k = 10
-    #W = utils.gen_random_projection(M=k, d=args.dims).permute(1, 0)
+    k = 100
+    W = utils.gen_random_projection(M=k, d=args.dims).permute(1, 0)
     #W1 = torch.rand(size=(1, 100))
     #W2 = 1 - W1
     #W = torch.cat([W1, W2], dim=0)
@@ -148,18 +151,16 @@ def train(net, optimizer, loader, args):
             optimizer.zero_grad()
             loss = 0
             Y = batch
-            #Y = torch.mean(torch.matmul(Y, W.double()), dim=1).unsqueeze(1)
+            Y = torch.matmul(Y, W.double())
             for j in range(args.m):
                 #for r in range(k):
-                u = torch.rand(size=(args.batch_size, 2))
+                u = torch.rand(size=(args.batch_size, args.dims))
                 #x = torch.ones(args.batch_size, args.dims) * W[:, r]
                 #x = torch.cat([u, x], dim=1)
                 Y_hat = net(u)
-                '''
                 if args.dims > 1:
-                    Y_hat = torch.mean(torch.matmul(Y_hat, W), dim=1).unsqueeze(1)
-                #u = torch.mean(torch.matmul(u, W), dim=1).unsqueeze(1)
-                '''
+                    Y_hat = torch.matmul(Y_hat, W)
+                    u = torch.matmul(u, W)
                 loss += huber_quantile_loss(Y_hat, Y, u, reduce=True)
                 #loss += l2_loss(Y_hat, Y, u)
             loss /= args.m
@@ -182,7 +183,7 @@ if __name__ == "__main__":
     # optimization related arguments
     parser.add_argument('--batch_size', default=128, type=int,
                         help='input batch size')
-    parser.add_argument('--epoch', default=50, type=int,
+    parser.add_argument('--epoch', default=20, type=int,
                         help='epochs to train for')
     parser.add_argument('--optimizer', default='adam', help='optimizer')
     parser.add_argument('--lr', default=0.005, type=float, help='LR')
