@@ -33,25 +33,58 @@ class Synthetic(data.Dataset):
         self.y = np.concatenate([self.y1, self.y2], axis=1)
         '''
         self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
+        #self.y = np.random.multivariate_normal(mean=[0, 0], cov=np.array([[1,2],[2,1]]), size=(self.n))
+
+        #uniform
+        #self.y1 = torch.rand(size=(self.n, 1))*5 + 1
+        #self.y2 = torch.rand(size=(self.n, 1))*3 + 2
+        #self.y = torch.cat([self.y1, self.y2], dim=1)
+
+        #exp
+        #self.y1 = np.random.exponential(scale=10, size=(self.n, 1))
+        #self.y2 = np.random.exponential(scale=2, size=(self.n, 1))
+        #self.y = np.concatenate([self.y1, self.y2], axis=1)
 
     def __len__(self):
         return self.n
 
     def __getitem__(self, i):
-        return torch.from_numpy(self.y[i])
+        return torch.from_numpy(self.y[i]).float()
 
 class QNN(nn.Module):
     def __init__(self, args):
         super(QNN, self).__init__()
         self.net = nn.Sequential(
-            nn.Linear(args.dims, 128),
+            nn.Linear(2, 128),
             nn.ReLU(True),
             nn.Linear(128, 128),
             nn.ReLU(True),
             nn.Linear(128, args.dims))
+        self.L = nn.Linear(args.dims, args.dims)
+        with torch.no_grad():
+            self.L.weight.copy_(torch.eye(args.dims))
+        mask = torch.tril(torch.ones(args.dims, args.dims))
+        self.L.weight.register_hook(self.get_zero_grad_hook(mask))
+        self.L_val = nn.Linear(args.dims, args.dims)
+       # with torch.no_grad():
+       #     self.L.weight.div_(torch.norm(self.L.weight, dim=1, keepdim=True))
+        	
+    def forward(self, x, train=True):
+        x = self.net(x)
+         
+        if train == False:
+            with torch.no_grad():
+                self.L_val.weight.copy_(self.L.weight)
+                det = torch.det(self.L.weight)
+                self.L_val.weight.div_(det**(1.0/args.dims))
+        
+        return x if train else self.L(x)
 
-    def forward(self, x):
-        return self.net(x)
+    def get_zero_grad_hook(self, mask):
+        def hook(grad):
+            return grad * mask
+        return hook
+
 
 def plot2d(Y, name):
     Y = Y.detach().cpu().numpy()
@@ -98,17 +131,19 @@ def criterion(pred, label, quantile):
     loss = (label-pred)*(quantile - (label-pred < 0).float())
     return torch.mean(loss)
 
-def huber_quantile_loss(output, target, tau, k=0.02, reduce=True):
-    #tau = torch.norm(tau, p=2, dim=1).unsqueeze(-1)/1.42
+def l1_quantile_loss(output, target, tau, reduce=True):
+    u = target - output
+    loss = (tau - (u.detach() <= 0).float()).mul_(u)
+    return loss.mean() if reduce else loss
+
+def huber_quantile_loss(output, target, tau, net, k=0.02, reduce=True):
     u = target - output
     loss = (tau - (u.detach() <= 0).float()).mul_(u.detach().abs().clamp(max=k).div_(k)).mul_(u)
-    loss = torch.abs(loss)
-    #cl = torch.abs(torch.sum(output, dim=1)-torch.sum(target, dim=1))
 
     # covariance difference norm loss
-    #cl = utils.cov(output.permute(-1,-2)) - utils.cov(target.permute(-1,-2))
-    #cl = torch.norm(cl, p=2)
-    return loss.mean() #+ 0.01*cl
+    cl =  torch.matmul(net.L.weight, net.L.weight.permute(1, 0)) - utils.cov(target.permute(-1,-2))
+    cl = torch.norm(cl, p=2)
+    return loss.mean() + cl
 
 def w_quantile_loss(output, target, tau, W, reduce=True):
     u = target - output
@@ -130,7 +165,7 @@ def test(net, args, name):
             #U = np.random.uniform(0, 1, size=(1, args.dims))
             #U = torch.from_numpy(U).float()
             U = torch.rand(size=(args.batch_size, args.dims))
-            Y_hat = net(U)
+            Y_hat = net(U, train=False)
             if tsr == None:
                 tsr = Y_hat
             else:
@@ -140,39 +175,40 @@ def test(net, args, name):
     plotaxis(tsr, name='imgs/train')
 
 def train(net, optimizer, loader, args):
-    k = 100
-    W = utils.gen_random_projection(M=k, d=args.dims).permute(1, 0)
-    #W1 = torch.rand(size=(1, 100))
-    #W2 = 1 - W1
-    #W = torch.cat([W1, W2], dim=0)
+    k = args.k
+    #W = utils.gen_random_projection(M=k, d=args.dims).permute(1, 0)
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
         for idx, batch in enumerate(loader):
             optimizer.zero_grad()
             loss = 0
             Y = batch
-            Y = torch.matmul(Y, W.double())
+            #Y = torch.matmul(Y, W)
             for j in range(args.m):
-                #for r in range(k):
                 u = torch.rand(size=(args.batch_size, args.dims))
                 #x = torch.ones(args.batch_size, args.dims) * W[:, r]
                 #x = torch.cat([u, x], dim=1)
                 Y_hat = net(u)
+                '''
                 if args.dims > 1:
                     Y_hat = torch.matmul(Y_hat, W)
-                    u = torch.matmul(u, W)
-                loss += huber_quantile_loss(Y_hat, Y, u, reduce=True)
-                #loss += l2_loss(Y_hat, Y, u)
+                    #u = torch.matmul(u, W)
+				'''
+                loss += huber_quantile_loss(Y_hat, Y, u, net=net, reduce=True)
             loss /= args.m
             loss.backward()
             optimizer.step()
+            '''
+            with torch.no_grad():
+                net.L.weight.div_(torch.norm(net.L.weight, dim=1, keepdim=True))
+            '''
             running_loss += loss.item()
-
+        print(net.L.weight)
         print('%.5f' %
         (running_loss/args.iters))
     test(net, args, name='imgs/trained.png')
     '''
-    Y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(args.batch_size*100))
+    Y = np.random.multivariate_normal(mean=[0, 0], cov=np.array([[1,2],[2,1]]), size=(args.batch_size*100))
     Y = torch.from_numpy(Y)
     plotaxis(Y, name='imgs/theor')
     plot2d(Y, name='imgs/theor.png')
@@ -183,7 +219,7 @@ if __name__ == "__main__":
     # optimization related arguments
     parser.add_argument('--batch_size', default=128, type=int,
                         help='input batch size')
-    parser.add_argument('--epoch', default=20, type=int,
+    parser.add_argument('--epoch', default=10, type=int,
                         help='epochs to train for')
     parser.add_argument('--optimizer', default='adam', help='optimizer')
     parser.add_argument('--lr', default=0.005, type=float, help='LR')
@@ -197,6 +233,7 @@ if __name__ == "__main__":
     parser.add_argument('--dims', default=2, type=int)
     parser.add_argument('--m', default=10, type=int)
     parser.add_argument('--n', default=10000, type=int)
+    parser.add_argument('--k', default=100, type=int)
     args = parser.parse_args()
 
     print("Input arguments:")
@@ -212,4 +249,9 @@ if __name__ == "__main__":
     optimizer = optimizer(net, args)
     train(net, optimizer, loader, args)
     #test(net, criterion, testloader, args)
+    '''
+    Y = torch.from_numpy(ds.y)
+    plotaxis(Y, name='imgs/theor')
+    plot2d(Y, name='imgs/theor.png')
+	'''
     print("Training completed!")

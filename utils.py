@@ -14,3 +14,5 @@ def cov(X):
     mean = torch.mean(X, dim=-1).unsqueeze(-1)
     X = X - mean
     return 1/(D-1) * X @ X.transpose(-1, -2)
+
+
