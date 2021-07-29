@@ -18,19 +18,25 @@ from lib import radam
 import matplotlib.pyplot as plt
 import seaborn as sns
 import utils
-from gsw import GSW
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class Synthetic(data.Dataset):
     def __init__(self, args,  n=1000):
         self.n = n
+        #self.y = np.random.normal(loc=args.mean, scale=args.std, size=(self.n, 1))
+        #self.y = np.random.normal(loc=args.mean, scale=args.std, size=(args.batch_size, args.dims))
+        #self.y = np.random.exponential(scale=1.0, size=(args.batch_size, 1))
+        '''
+        self.y1 = gaussian_mixture(means=[-3, 1, 8], stds=[0.5, 0.5, 0.5], p=[0.1, 0.6, 0.3], args=args)
+        self.y2 = gaussian_mixture(means=[-3, 1, 8], stds=[0.5, 0.5, 0.5], p=[0.1, 0.6, 0.3], args=args)
+        self.y = np.concatenate([self.y1, self.y2], axis=1)
+        '''
         np.random.seed(0)
-        self.y = np.random.normal(loc=0, scale=1, size=(self.n, 2))
-        #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
-
-        #torch.manual_seed(0)
-        #self.u = torch.rand(self.n, args.dims)
-        #self.y = np.random.multivariate_normal(mean=[0, 0], cov=np.array([[1,0],[0,1]]), size=(self.n))
+        self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
+        torch.manual_seed(0)
+        self.u = torch.rand(self.n, args.dims)
+        #self.y = np.random.multivariate_normal(mean=[0, 0], cov=np.array([[1,2],[2,1]]), size=(self.n))
 
         #uniform
         #self.y1 = torch.rand(size=(self.n, 1))*5 + 1
@@ -46,11 +52,7 @@ class Synthetic(data.Dataset):
         return self.n
 
     def __getitem__(self, i):
-        #x = torch.empty(args.dims)
-        #x[self.u[i] < 0.5] = 0.5
-        #x[self.u[i] >= 0.5] = 0.75
-        #u = torch.cat([x, self.u[i]], dim=-1).float()
-        return torch.from_numpy(self.y[i]).float()#, self.u[i].float(), torch.from_numpy(self.x[i]).float()
+        return torch.from_numpy(self.y[i]).float(), self.u[i].float()
 
 class QNN(nn.Module):
     def __init__(self, args):
@@ -133,22 +135,17 @@ def optimizer(net, args):
     elif args.optimizer.lower() == "radam":
            return radam.RAdam(net.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
  
-def gaussian_kernel(a, b):
-    dim1_1, dim1_2 = a.shape[0], b.shape[0]
-    depth = a.shape[1]
-    a = a.view(dim1_1, 1, depth)
-    b = b.view(1, dim1_2, depth)
-    a_core = a.expand(dim1_1, dim1_2, depth)
-    b_core = b.expand(dim1_1, dim1_2, depth)
-    numerator = (a_core - b_core).pow(2).mean(2)/depth
-    return torch.exp(-numerator)
-
-def MMD(a, b):
-    return gaussian_kernel(a, a).mean() + gaussian_kernel(b, b).mean() - 2*gaussian_kernel(a, b).mean()
+def criterion(pred, label, quantile):
+    loss = (label-pred)*(quantile - (label-pred < 0).float())
+    return torch.mean(loss)
 
 def l1_quantile_loss(output, target, tau, reduce=True):
     u = target - output
-    loss = (tau - (u.detach() <= 0).float()).mul_(u)
+    #loss = (tau - (u.detach() <= 0).float()).mul_(u)
+    x = torch.rand(128, 2)
+    x[x > 0.5] = 0.5
+    x[x <= 0.5] = 0.75
+    loss = (x - (u.detach() <=0).float()).mul_(u)
     return loss.mean() if reduce else loss
 
 def huber_quantile_loss(output, target, tau, net, k=0.02, reduce=True):
@@ -176,48 +173,47 @@ def test(net, args, name):
     net.eval()
     tsr = None
     with torch.no_grad():
+        '''
         for i in range(100): # get args.batch_size x 100 samples
             #U = np.random.uniform(0, 1, size=(1, args.dims))
             #U = torch.from_numpy(U).float()
             U = torch.rand(size=(args.batch_size, args.dims))
             Y_hat = net(U, train=False)
-            '''
+        '''
         for idx, batch in enumerate(loader):
             Y, u = batch
             Y_hat = net(u)
-            '''
             if tsr == None:
                 tsr = Y_hat
             else:
                 tsr = torch.cat([tsr, Y_hat], dim=0)
-    if args.dims == 1:
-        histogram(tsr, name) # uncomment for 1d case
-    else:
-        plot2d(tsr, name='imgs/2d.png') # 2d contour plot
-        plotaxis(tsr, name='imgs/train')
+    #histogram(tsr, name) # uncomment for 1d case
+    plot2d(tsr, name='imgs/2d.png') # 2d contour plot
+    plotaxis(tsr, name='imgs/train')
 
 def train(net, optimizer, loader, args):
-    #loss_fn = GSW()
+    #loss_fn = nn.L1Loss() #MSELoss()
     k = args.k
-    #W = utils.gen_random_projection(M=10, d=args.dims).permute(1, 0)
-    #W = utils.linear(M=100, d=args.dims).permute(1, 0)
+    #W = utils.gen_random_projection(M=k, d=args.dims).permute(1, 0)
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
         for idx, batch in enumerate(loader):
             optimizer.zero_grad()
             loss = 0
-            Y = batch
+            Y, u = batch
             #Y = torch.matmul(Y, W)
             for j in range(args.m):
-                u = torch.rand(size=(args.batch_size, args.dims))
+                #u = torch.rand(size=(args.batch_size, args.dims))
+                #x = torch.ones(args.batch_size, args.dims) * W[:, r]
+                #x = torch.cat([u, x], dim=1)
                 Y_hat = net(u)
                 '''
                 if args.dims > 1:
                     Y_hat = torch.matmul(Y_hat, W)
                     #u = torch.matmul(u, W)
-                '''
+				'''
                 #print(Y_hat.shape, Y.shape, u.shape)
-                loss += l1_quantile_loss(Y_hat, Y, u) #+ 0.3*MMD(Y_hat, Y)
+                loss += l1_quantile_loss(Y_hat, Y, u, reduce=True)
             loss /= args.m
             loss.backward()
             optimizer.step()
@@ -255,7 +251,7 @@ if __name__ == "__main__":
     parser.add_argument('--std', default=1, type=int)
     parser.add_argument('--dims', default=2, type=int)
     parser.add_argument('--m', default=10, type=int)
-    parser.add_argument('--n', default=2000, type=int)
+    parser.add_argument('--n', default=10000, type=int)
     parser.add_argument('--k', default=100, type=int)
     args = parser.parse_args()
 

@@ -18,15 +18,19 @@ from lib import radam
 import matplotlib.pyplot as plt
 import seaborn as sns
 import utils
+from utils import truncated_normal
 from gsw import GSW
+from ot_modules.icnn import *
+from ot_modules.dual import dual
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class Synthetic(data.Dataset):
     def __init__(self, args,  n=1000):
         self.n = n
         np.random.seed(0)
-        self.y = np.random.normal(loc=0, scale=1, size=(self.n, 2))
-        #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
+        #self.y = np.random.normal(loc=0, scale=1, size=(self.n, 2))
+        self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,2],[2,5]]), size=(self.n))
 
         #torch.manual_seed(0)
         #self.u = torch.rand(self.n, args.dims)
@@ -50,7 +54,7 @@ class Synthetic(data.Dataset):
         #x[self.u[i] < 0.5] = 0.5
         #x[self.u[i] >= 0.5] = 0.75
         #u = torch.cat([x, self.u[i]], dim=-1).float()
-        return torch.from_numpy(self.y[i]).float()#, self.u[i].float(), torch.from_numpy(self.x[i]).float()
+        return torch.from_numpy(self.y[i]).float()#, self.u[i].float()#, torch.from_numpy(self.x[i]).float()
 
 class QNN(nn.Module):
     def __init__(self, args):
@@ -172,29 +176,25 @@ def l2_loss(output, target, tau):
     loss = torch.norm(loss, p=2, dim=1)
     return loss.mean()
 
-def test(net, args, name):
+def test(net, args, name, loader):
     net.eval()
-    tsr = None
-    with torch.no_grad():
-        for i in range(100): # get args.batch_size x 100 samples
-            #U = np.random.uniform(0, 1, size=(1, args.dims))
-            #U = torch.from_numpy(U).float()
-            U = torch.rand(size=(args.batch_size, args.dims))
-            Y_hat = net(U, train=False)
-            '''
-        for idx, batch in enumerate(loader):
-            Y, u = batch
-            Y_hat = net(u)
-            '''
-            if tsr == None:
-                tsr = Y_hat
-            else:
-                tsr = torch.cat([tsr, Y_hat], dim=0)
+
+    '''
+    for p in list(net.parameters()):
+        if hasattr(p, 'be_positive'):
+            print(p)
+    '''
+    U = torch.rand(size=(2000, args.dims), requires_grad=True)
+    f = net(U).sum()
+    Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
+
     if args.dims == 1:
-        histogram(tsr, name) # uncomment for 1d case
+        histogram(Y_hat, name) # uncomment for 1d case
     else:
-        plot2d(tsr, name='imgs/2d.png') # 2d contour plot
-        plotaxis(tsr, name='imgs/train')
+        plot2d(Y_hat, name='imgs/2d.png') # 2d contour plot
+        plotaxis(Y_hat, name='imgs/train')
+
+positive_params = []
 
 def train(net, optimizer, loader, args):
     #loss_fn = GSW()
@@ -204,32 +204,31 @@ def train(net, optimizer, loader, args):
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
         for idx, batch in enumerate(loader):
-            optimizer.zero_grad()
+            if idx < len(loader)-1:
+                optimizer.zero_grad()
             loss = 0
             Y = batch
             #Y = torch.matmul(Y, W)
             for j in range(args.m):
                 u = torch.rand(size=(args.batch_size, args.dims))
+                #u_x = torch.ones(size=(args.batch_size, args.dims)) * torch.tensor([0.9, 0.1])
                 Y_hat = net(u)
-                '''
-                if args.dims > 1:
-                    Y_hat = torch.matmul(Y_hat, W)
-                    #u = torch.matmul(u, W)
-                '''
-                #print(Y_hat.shape, Y.shape, u.shape)
-                loss += l1_quantile_loss(Y_hat, Y, u) #+ 0.3*MMD(Y_hat, Y)
+                loss += dual(U=u, Y_hat=Y_hat, Y=Y) #+ 0.3*MMD(Y_hat, Y)
             loss /= args.m
             loss.backward()
+            '''
+            for p in list(net.parameters()):
+                p.grad.copy_(-p.grad)
+            '''
             optimizer.step()
-            '''
-            with torch.no_grad():
-                net.L.weight.div_(torch.norm(net.L.weight, dim=1, keepdim=True))
-            '''
+
+            for p in positive_params:
+                p.data.copy_(torch.relu(p.data))
             running_loss += loss.item()
         #print(net.L.weight)
         print('%.5f' %
         (running_loss/args.iters))
-    test(net, args, name='imgs/trained.png')
+    test(net, args, name='imgs/trained.png', loader=loader)
     '''
     Y = np.random.multivariate_normal(mean=[0, 0], cov=np.array([[1,2],[2,1]]), size=(args.batch_size*100))
     Y = torch.from_numpy(Y)
@@ -255,7 +254,7 @@ if __name__ == "__main__":
     parser.add_argument('--std', default=1, type=int)
     parser.add_argument('--dims', default=2, type=int)
     parser.add_argument('--m', default=10, type=int)
-    parser.add_argument('--n', default=2000, type=int)
+    parser.add_argument('--n', default=5000, type=int)
     parser.add_argument('--k', default=100, type=int)
     args = parser.parse_args()
 
@@ -264,7 +263,16 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     #trainloader, testloader = dataloader(args)
-    net = QNN(args)
+    net = ICNN_LastInp_Quadratic(input_dim=args.dims,
+                                 hidden_dim=128,
+                                 activation='celu',
+                                 num_layer=4)
+
+    for p in list(net.parameters()):
+        if hasattr(p, 'be_positive'):
+            positive_params.append(p)
+        p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
+
     ds = Synthetic(args, n=args.n)
     loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
     #net = torch.nn.RNN(input_size=1, hidden_size=1, num_layers=1, nonlinearity='relu')
