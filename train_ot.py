@@ -29,8 +29,8 @@ class Synthetic(data.Dataset):
     def __init__(self, args,  n=1000):
         self.n = n
         np.random.seed(0)
-        #self.y = np.random.normal(loc=0, scale=1, size=(self.n, 2))
-        self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
+        self.y = np.random.normal(loc=0, scale=1, size=(self.n, 2))
+        #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
 
         #torch.manual_seed(0)
         #self.u = torch.rand(self.n, args.dims)
@@ -269,7 +269,7 @@ if __name__ == "__main__":
     net = ICNN_LastInp_Quadratic(input_dim=args.dims,
                                  hidden_dim=128,
                                  activation='celu',
-                                 num_layer=4)
+                                 num_layer=2)
 
     for p in list(net.parameters()):
         if hasattr(p, 'be_positive'):
