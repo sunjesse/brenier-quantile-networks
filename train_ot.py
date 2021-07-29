@@ -30,7 +30,7 @@ class Synthetic(data.Dataset):
         self.n = n
         np.random.seed(0)
         #self.y = np.random.normal(loc=0, scale=1, size=(self.n, 2))
-        self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,2],[2,5]]), size=(self.n))
+        self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
 
         #torch.manual_seed(0)
         #self.u = torch.rand(self.n, args.dims)
@@ -209,12 +209,15 @@ def train(net, optimizer, loader, args):
             loss = 0
             Y = batch
             #Y = torch.matmul(Y, W)
+            U = torch.empty(size=(args.batch_size, args.dims, args.m))
+            Y_hats = torch.empty(size=(args.batch_size, 1, args.m))
             for j in range(args.m):
                 u = torch.rand(size=(args.batch_size, args.dims))
-                #u_x = torch.ones(size=(args.batch_size, args.dims)) * torch.tensor([0.9, 0.1])
+                U[:, :, j] = u
                 Y_hat = net(u)
-                loss += dual(U=u, Y_hat=Y_hat, Y=Y) #+ 0.3*MMD(Y_hat, Y)
-            loss /= args.m
+                Y_hats[:, :, j] = Y_hat
+            loss += dual(U=U, Y_hat=Y_hats, Y=Y)
+            #loss /= args.m
             loss.backward()
             '''
             for p in list(net.parameters()):
