@@ -5,8 +5,6 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision
-import torchvision.transforms as transforms
 import torch.optim as optim
 from torch.utils import data
 import argparse
@@ -20,12 +18,13 @@ import seaborn as sns
 import utils
 from gsw import GSW
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+from gen_data import *
 
 class Synthetic(data.Dataset):
     def __init__(self, args,  n=1000):
         self.n = n
         np.random.seed(0)
-        self.y = np.random.normal(loc=0, scale=1, size=(self.n, 2))
+        #self.y = np.random.normal(loc=0, scale=1, size=(self.n, 2))
         #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
 
         #torch.manual_seed(0)
@@ -42,6 +41,15 @@ class Synthetic(data.Dataset):
         #self.y2 = np.random.exponential(scale=2, size=(self.n, 1))
         #self.y = np.concatenate([self.y1, self.y2], axis=1)
 
+        #gaussian checkerboard
+        self.y = np.load('../data/synthetic/bary_ot_checkerboard_3.npy', allow_pickle=True).tolist()
+        self.y = self.y['Y']
+        
+        '''
+        self.y, _ = make_spiral(n_samples_per_class=self.n, n_classes=1,
+            n_rotations=2.5, gap_between_spiral=0.1, noise=0.2,
+                gap_between_start_point=0.1, equal_interval=True)
+        '''
     def __len__(self):
         return self.n
 
@@ -50,7 +58,7 @@ class Synthetic(data.Dataset):
         #x[self.u[i] < 0.5] = 0.5
         #x[self.u[i] >= 0.5] = 0.75
         #u = torch.cat([x, self.u[i]], dim=-1).float()
-        return torch.from_numpy(self.y[i]).float()#, self.u[i].float(), torch.from_numpy(self.x[i]).float()
+        return torch.from_numpy(self.y[i]).float()#, self.u[i].float()#, torch.from_numpy(self.x[i]).float()
 
 class QNN(nn.Module):
     def __init__(self, args):
@@ -217,7 +225,7 @@ def train(net, optimizer, loader, args):
                     #u = torch.matmul(u, W)
                 '''
                 #print(Y_hat.shape, Y.shape, u.shape)
-                loss += l1_quantile_loss(Y_hat, Y, u) #+ 0.3*MMD(Y_hat, Y)
+                loss += l1_quantile_loss(Y_hat, Y, u) #MMD(Y_hat, Y)
             loss /= args.m
             loss.backward()
             optimizer.step()

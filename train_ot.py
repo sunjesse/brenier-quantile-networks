@@ -5,8 +5,6 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision
-import torchvision.transforms as transforms
 import torch.optim as optim
 from torch.utils import data
 import argparse
@@ -22,6 +20,7 @@ from utils import truncated_normal
 from gsw import GSW
 from ot_modules.icnn import *
 from ot_modules.dual import dual
+from gen_data import *
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -29,7 +28,7 @@ class Synthetic(data.Dataset):
     def __init__(self, args,  n=1000):
         self.n = n
         np.random.seed(0)
-        self.y = np.random.normal(loc=0, scale=1, size=(self.n, 2))
+        #self.y = np.random.normal(loc=0, scale=1, size=(self.n, 2))
         #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
 
         #torch.manual_seed(0)
@@ -45,9 +44,17 @@ class Synthetic(data.Dataset):
         #self.y1 = np.random.exponential(scale=10, size=(self.n, 1))
         #self.y2 = np.random.exponential(scale=2, size=(self.n, 1))
         #self.y = np.concatenate([self.y1, self.y2], axis=1)
+        
+        #gaussian checkerboard
+        #self.y = np.load('../data/synthetic/bary_ot_checkerboard_3.npy', allow_pickle=True).tolist()
+        #self.y = self.y['Y']
+        
+        self.y, _ = make_spiral(n_samples_per_class=self.n, n_classes=1,
+            n_rotations=2.5, gap_between_spiral=0.1, noise=0.2,
+                gap_between_start_point=0.1, equal_interval=True)
 
     def __len__(self):
-        return self.n
+        return len(self.y)#self.y
 
     def __getitem__(self, i):
         #x = torch.empty(args.dims)
@@ -184,7 +191,7 @@ def test(net, args, name, loader):
         if hasattr(p, 'be_positive'):
             print(p)
     '''
-    U = torch.rand(size=(2000, args.dims), requires_grad=True)
+    U = torch.rand(size=(2000, args.dims), requires_grad=True).cuda()
     f = net(U).sum()
     Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
 
@@ -197,10 +204,7 @@ def test(net, args, name, loader):
 positive_params = []
 
 def train(net, optimizer, loader, args):
-    #loss_fn = GSW()
     k = args.k
-    #W = utils.gen_random_projection(M=10, d=args.dims).permute(1, 0)
-    #W = utils.linear(M=100, d=args.dims).permute(1, 0)
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
         for idx, batch in enumerate(loader):
@@ -208,11 +212,10 @@ def train(net, optimizer, loader, args):
                 optimizer.zero_grad()
             loss = 0
             Y = batch
-            #Y = torch.matmul(Y, W)
             U = torch.empty(size=(args.batch_size, args.dims, args.m))
             Y_hats = torch.empty(size=(args.batch_size, 1, args.m))
             for j in range(args.m):
-                u = torch.rand(size=(args.batch_size, args.dims))
+                u = torch.rand(size=(args.batch_size, args.dims)).cuda()
                 U[:, :, j] = u
                 Y_hat = net(u)
                 Y_hats[:, :, j] = Y_hat
@@ -228,7 +231,6 @@ def train(net, optimizer, loader, args):
             for p in positive_params:
                 p.data.copy_(torch.relu(p.data))
             running_loss += loss.item()
-        #print(net.L.weight)
         print('%.5f' %
         (running_loss/args.iters))
     test(net, args, name='imgs/trained.png', loader=loader)
@@ -265,12 +267,12 @@ if __name__ == "__main__":
     for key, val in vars(args).items():
         print("{:16} {}".format(key, val))
 
-    #trainloader, testloader = dataloader(args)
+    torch.cuda.set_device('cuda:0')
     net = ICNN_LastInp_Quadratic(input_dim=args.dims,
                                  hidden_dim=128,
                                  activation='celu',
-                                 num_layer=2)
-
+                                 num_layer=3)
+                                 
     for p in list(net.parameters()):
         if hasattr(p, 'be_positive'):
             positive_params.append(p)
@@ -278,11 +280,9 @@ if __name__ == "__main__":
 
     ds = Synthetic(args, n=args.n)
     loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
-    #net = torch.nn.RNN(input_size=1, hidden_size=1, num_layers=1, nonlinearity='relu')
-    #criterion = nn.CrossEntropyLoss()
     optimizer = optimizer(net, args)
+    net.cuda()
     train(net, optimizer, loader, args)
-    #test(net, criterion, testloader, args)
     '''
     Y = torch.from_numpy(ds.y)
     plotaxis(Y, name='imgs/theor')
