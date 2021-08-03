@@ -18,6 +18,7 @@ from lib import radam
 import matplotlib.pyplot as plt
 import seaborn as sns
 import utils
+from gen_data import *
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -28,10 +29,19 @@ class Synthetic(data.Dataset):
         #self.y = np.random.normal(loc=args.mean, scale=args.std, size=(args.batch_size, args.dims))
         #self.y = np.random.exponential(scale=1.0, size=(args.batch_size, 1))
         #self.y = gaussian_mixture(means=[-3, 1, 8], stds=[0.5, 0.5, 0.5], p=[0.1, 0.6, 0.3], args=args)
-        self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
+        #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
+
+        #gaussian checkerboard
+        self.y = np.load('../data/synthetic/bary_ot_checkerboard_3.npy', allow_pickle=True).tolist()
+        self.y = self.y['Y']
+
+        #spiral
+        self.y, _ = make_spiral(n_samples_per_class=self.n, n_classes=1,
+            n_rotations=2.5, gap_between_spiral=0.1, noise=0.2,
+                gap_between_start_point=0.1, equal_interval=True)
 
     def __len__(self):
-        return self.n
+        return len(self.y)#self.n
 
     def __getitem__(self, i):
         return torch.from_numpy(self.y[i])
@@ -55,8 +65,8 @@ class RNN(nn.Module):
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
-        self.fc1 = nn.Linear(hidden_size, 1)
-        self.fc2 = nn.Linear(hidden_size, 1)
+        #self.fc1 = nn.Linear(hidden_size, 1)
+        self.fc2 = nn.Linear(hidden_size, 2)
 
     def forward(self, x):
         # Set initial hidden and cell states 
@@ -67,9 +77,9 @@ class RNN(nn.Module):
         out, _ = self.lstm(x, (h0, c0))  # out: tensor of shape (batch_size, seq_length, hidden_size)
         
         # Decode the hidden state of the last time step
-        out1 = self.fc1(out[:, 0, :])
-        out2 = self.fc2(out[:, -1, :])
-        out = torch.cat([out1, out2], dim=-1)
+        #out1 = self.fc1(out[:, 0, :])
+        out = self.fc2(out[:, -1, :])
+        #out = torch.cat([out1, out2], dim=-1)
         return out
 
 def plot2d(Y, name):

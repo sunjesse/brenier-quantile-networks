@@ -20,6 +20,7 @@ from utils import truncated_normal
 from gsw import GSW
 from ot_modules.icnn import *
 from gen_data import *
+from torchvision import datasets, transforms, utils
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -28,7 +29,7 @@ class Synthetic(data.Dataset):
         self.n = n
         np.random.seed(0)
         #self.y = np.random.normal(loc=0, scale=1, size=(self.n, 2))
-        self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
+        #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,2],[2,5]]), size=(self.n))
 
         #torch.manual_seed(0)
         #self.u = torch.rand(self.n, args.dims)
@@ -54,6 +55,11 @@ class Synthetic(data.Dataset):
             n_rotations=2.5, gap_between_spiral=0.1, noise=0.2,
                 gap_between_start_point=0.1, equal_interval=True)
         '''
+
+        #mnist
+        transform=transforms.Compose([transforms.ToTensor()])
+        self.y_ = datasets.MNIST('../data', train=True, download=True,transform=transform)
+        self.y = self.y_.data.flatten(-2, -1)/255.
 
     def __len__(self):
         return len(self.y)#self.y
@@ -193,9 +199,16 @@ def test(net, args, name, loader):
         if hasattr(p, 'be_positive'):
             print(p)
     '''
-    U = torch.rand(size=(2000, args.dims), requires_grad=True).cuda()
+    #U = torch.rand(size=(2000, args.dims), requires_grad=True).cuda()
+    U = torch.rand(size=(64, 784), requires_grad=True).cuda()
     f = net(U).sum()
     Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
+    
+    #mnist
+    Y_hat = Y_hat.view(64, 28, 28).unsqueeze(1)
+    utils.save_image(utils.make_grid(Y_hat),
+        './mnist.png')
+    return
 
     if args.dims == 1:
         histogram(Y_hat, name) # uncomment for 1d case
@@ -226,7 +239,8 @@ def dual(U, Y_hat, Y, eps=1):
 def train(net, optimizer, Y, args):
     k = args.k
     for epoch in range(1, args.epoch+1):
-        u = torch.rand(size=(args.n, args.dims)).cuda()
+        #u = torch.rand(size=(args.n, args.dims)).cuda()
+        u = torch.rand(size=(args.n, 2)).cuda()
         running_loss = 0.0
         optimizer.zero_grad()
         loss = 0
@@ -238,7 +252,7 @@ def train(net, optimizer, Y, args):
         for p in positive_params:
             p.data.copy_(torch.relu(p.data))
         running_loss += loss.item()
-        if epoch % (args.epoch // 10) == 0:
+        if epoch % (args.epoch // 50) == 0:
             print('%.5f' %
             (running_loss/args.iters))
     test(net, args, name='imgs/trained.png', loader=loader)
@@ -276,8 +290,8 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     torch.cuda.set_device('cuda:0')
-    net = ICNN_LastInp_Quadratic(input_dim=args.dims,
-                                 hidden_dim=512,
+    net = ICNN_LastInp_Quadratic(input_dim=784,#args.dims,
+                                 hidden_dim=1024,#512,
                                  activation='celu',
                                  num_layer=3)
                                  
@@ -290,7 +304,8 @@ if __name__ == "__main__":
     loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
     optimizer = optimizer(net, args)
     net.cuda()
-    train(net, optimizer, torch.from_numpy(ds.y).float().cuda(), args)
+    #train(net, optimizer, torch.from_numpy(ds.y).float().cuda(), args)
+    train(net, optimizer, ds.y[:args.n].float().cuda(), args)
     '''
     Y = torch.from_numpy(ds.y)
     plotaxis(Y, name='imgs/theor')
