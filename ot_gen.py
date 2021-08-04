@@ -56,20 +56,22 @@ class Synthetic(data.Dataset):
                 gap_between_start_point=0.1, equal_interval=True)
         '''
 
+        self.y = np.random.standard_t(df=2, size=(args.n, 2))
+
         #mnist
+        '''
         transform=transforms.Compose([transforms.ToTensor()])
         self.y_ = datasets.MNIST('../data', train=True, download=True,transform=transform)
         self.y = self.y_.data.flatten(-2, -1)/255.
+        '''
 
     def __len__(self):
         return len(self.y)#self.y
 
     def __getitem__(self, i):
-        #x = torch.empty(args.dims)
-        #x[self.u[i] < 0.5] = 0.5
-        #x[self.u[i] >= 0.5] = 0.75
-        #u = torch.cat([x, self.u[i]], dim=-1).float()
-        return torch.from_numpy(self.y[i]).float()#, self.u[i].float()#, torch.from_numpy(self.x[i]).float()
+        if torch.is_tensor(self.y):
+            return self.y[i].float()
+        return torch.from_numpy(self.y[i]).float()
 
 class QNN(nn.Module):
     def __init__(self, args):
@@ -199,17 +201,18 @@ def test(net, args, name, loader):
         if hasattr(p, 'be_positive'):
             print(p)
     '''
-    #U = torch.rand(size=(2000, args.dims), requires_grad=True).cuda()
-    U = torch.rand(size=(64, 784), requires_grad=True).cuda()
+    U = torch.rand(size=(args.n, args.dims), requires_grad=True).cuda()
+    #U = torch.rand(size=(64, 784), requires_grad=True).cuda()
     f = net(U).sum()
     Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
     
     #mnist
+    '''
     Y_hat = Y_hat.view(64, 28, 28).unsqueeze(1)
     utils.save_image(utils.make_grid(Y_hat),
         './mnist.png')
     return
-
+    '''
     if args.dims == 1:
         histogram(Y_hat, name) # uncomment for 1d case
     else:
@@ -218,7 +221,7 @@ def test(net, args, name, loader):
 
 positive_params = []
 
-def dual(U, Y_hat, Y, eps=1):
+def dual(U, Y_hat, Y, eps=0.1):
     loss = torch.mean(Y_hat)
     Y = Y.permute(1, 0)
     '''
@@ -232,8 +235,12 @@ def dual(U, Y_hat, Y, eps=1):
     '''
     sup, _ = torch.max(psi, dim=0)
     loss += torch.mean(sup)
-    #l = torch.exp(psi-sup/eps)
-    #loss += eps*torch.mean(l)
+
+    if eps == 0:
+        return loss
+
+    l = torch.exp((psi-sup)/eps)
+    loss += eps*torch.mean(l)
     return loss
 
 def train(net, optimizer, Y, args):
@@ -245,7 +252,7 @@ def train(net, optimizer, Y, args):
         optimizer.zero_grad()
         loss = 0
         Y_hat = net(u)
-        loss += dual(U=u, Y_hat=Y_hat, Y=Y)
+        loss += dual(U=u, Y_hat=Y_hat, Y=Y, eps=args.eps)
         loss.backward()
         optimizer.step()
 
@@ -283,6 +290,8 @@ if __name__ == "__main__":
     parser.add_argument('--m', default=10, type=int)
     parser.add_argument('--n', default=5000, type=int)
     parser.add_argument('--k', default=100, type=int)
+    parser.add_argument('--genTheor', action='store_true')
+    parser.add_argument('--eps', default=0, type=float)
     args = parser.parse_args()
 
     print("Input arguments:")
@@ -290,8 +299,8 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     torch.cuda.set_device('cuda:0')
-    net = ICNN_LastInp_Quadratic(input_dim=784,#args.dims,
-                                 hidden_dim=1024,#512,
+    net = ICNN_LastInp_Quadratic(input_dim=args.dims,#784,
+                                 hidden_dim=512,#1024,
                                  activation='celu',
                                  num_layer=3)
                                  
@@ -304,11 +313,12 @@ if __name__ == "__main__":
     loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
     optimizer = optimizer(net, args)
     net.cuda()
-    #train(net, optimizer, torch.from_numpy(ds.y).float().cuda(), args)
-    train(net, optimizer, ds.y[:args.n].float().cuda(), args)
-    '''
-    Y = torch.from_numpy(ds.y)
-    plotaxis(Y, name='imgs/theor')
-    plot2d(Y, name='imgs/theor.png')
-    '''
+    train(net, optimizer, torch.from_numpy(ds.y).float().cuda(), args)
+    #train(net, optimizer, ds.y[:args.n].float().cuda(), args)
+
+    if args.genTheor:
+        Y = torch.from_numpy(ds.y)
+        plotaxis(Y, name='imgs/theor')
+        plot2d(Y, name='imgs/theor.png')
+
     print("Training completed!")
