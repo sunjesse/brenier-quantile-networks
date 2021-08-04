@@ -5,6 +5,7 @@ import math
 from torch.autograd import Variable
 from torch.autograd import Function
 import numpy as np
+import gc
 
 '''''''''''''''''''''''''''''''''''''''''
             f net and g net
@@ -224,9 +225,31 @@ class ICNN_LastInp_Quadratic(nn.Module):
                 x).add(self.normal[i](input)))
 
         x = self.last_convex(x).add(self.last_linear(input).pow(2))
+        quad = (input.view(input.size(0), -1) ** 2).sum(1, keepdim=True) / 2 
+        return x + quad
 
+    def invert(self, y, max_iter=1000000, lr=1.0, tol=1e-12):
+        x = y.clone().detach().requires_grad_(True)
+
+        def closure():
+            F = self.forward(x)
+            loss = torch.sum(F) - torch.sum(x * y)
+            x.grad = torch.autograd.grad(loss, x)[0].detach()
+            return loss
+        
+        opt = torch.optim.LBFGS([x], lr=lr, line_search_fn="strong_wolfe", max_iter=max_iter, tolerance_grad=tol,
+                                tolerance_change=tol)
+
+        opt.step(closure)
+        
+        F = self.forward(x)
+        f = torch.autograd.grad(F.sum(), x, create_graph=True)[0]
+        error = (f - y).abs().max().item()
+        print("max inversion error: " + str(error))
+
+        torch.cuda.empty_cache()
+        gc.collect()
         return x
-
 
 '''''''''''''''''''''''''''''''''''''''''
                 h net
