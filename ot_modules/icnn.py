@@ -241,12 +241,12 @@ class ICNN_LastInp_Quadratic(nn.Module):
                                 tolerance_change=tol)
 
         opt.step(closure)
-        
+        ''' 
         F = self.forward(x)
         f = torch.autograd.grad(F.sum(), x, create_graph=True)[0]
         error = (f - y).abs().max().item()
         print("max inversion error: " + str(error))
-
+        '''
         torch.cuda.empty_cache()
         gc.collect()
         return x

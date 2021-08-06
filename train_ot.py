@@ -12,12 +12,10 @@ import numpy as np
 import scipy
 from scipy.stats import norm
 #our libs
-from lib import radam
 import matplotlib.pyplot as plt
 import seaborn as sns
 import utils
 from utils import truncated_normal
-from gsw import GSW
 from ot_modules.icnn import *
 from gen_data import *
 from torchvision import datasets, transforms, utils
@@ -170,6 +168,8 @@ def test(net, args, name, loader):
     inverse = net.invert(Y_hat)
     print(U)
     print(inverse)
+    m = (U - inverse).abs().max().item()
+    print(m)
     print()
     
     #mnist

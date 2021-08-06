@@ -14,7 +14,6 @@ import numpy as np
 import scipy
 from scipy.stats import norm
 #our libs
-from lib import radam
 import matplotlib.pyplot as plt
 import seaborn as sns
 import utils
