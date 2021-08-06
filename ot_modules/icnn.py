@@ -226,7 +226,7 @@ class ICNN_LastInp_Quadratic(nn.Module):
                 x).add(self.normal[i](input)))
 
         x = self.last_convex(x).add(self.last_linear(input).pow(2))
-        quad = (input.view(input.size(0), -1) ** 2).sum(1, keepdim=True) / 2 
+        quad = (input.view(input.size(0), -1) ** 2).sum(1, keepdim=True) / input.shape[1]
         return x + quad
 
     def invert(self, y, max_iter=1000000, lr=1.0, tol=1e-12):

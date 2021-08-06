@@ -48,25 +48,24 @@ class Synthetic(data.Dataset):
         #self.y = self.y['Y']
        
         #spiral
+        '''
         self.y, _ = make_spiral(n_samples_per_class=self.n, n_classes=1,
             n_rotations=2.5, gap_between_spiral=0.1, noise=0.2,
                 gap_between_start_point=0.1, equal_interval=True)
-
+        '''
         #self.y = np.random.standard_t(df=2, size=(args.n, 2))
 
         #mnist
-        '''
         transform=transforms.Compose([transforms.ToTensor()])
         self.y_ = datasets.MNIST('../data', train=True, download=True,transform=transform)
-        self.y = self.y_.data.flatten(-2, -1)/255.
-        '''
+        self.y = self.y_.data.flatten(-2, -1).float()/255.
 
     def __len__(self):
-        return len(self.y)#self.y
+        return 5000# len(self.y)#self.y
 
     def __getitem__(self, i):
         if torch.is_tensor(self.y):
-            return self.y[i].float()
+            return self.y[i].cuda() / 255.
         return torch.from_numpy(self.y[i]).float().cuda()
 
 
@@ -122,34 +121,32 @@ def test(net, args, name, loader, Y):
     if args.gaussian_support: 
         gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
 
-    U = torch.rand(size=(args.n, args.dims), requires_grad=True).cuda()
+    #U = torch.rand(size=(args.n, args.dims), requires_grad=True).cuda()
+    U = torch.rand(size=(64, 784), requires_grad=True).cuda()
     U_ = torch.clone(U)
     if args.gaussian_support:
         U = gauss.icdf(U)
-        
-    #U = torch.rand(size=(64, 784), requires_grad=True).cuda()
     f = net(U).sum()
     Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
     print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
+    '''
     inverse = net.invert(Y_hat)
     if args.gaussian_support:
         inverse = gauss.cdf(inverse)
     m = (U_ - inverse).abs().max().item()
     print("max error of inversion: " + str(m))
-
     data = torch.sort(Y, dim=0)[0]
     z = net.invert(data)
     if args.gaussian_support:
         z = gauss.cdf(z)
     print("sampled points from target, sorted: " + str(data))
     print("corresponding quantiles: " + str(z))
-    #mnist
     '''
+    #mnist
     Y_hat = Y_hat.view(64, 28, 28).unsqueeze(1)
     utils.save_image(utils.make_grid(Y_hat),
         './mnist.png')
     return
-    '''
     if args.dims == 1:
         histogram(Y_hat, name) # uncomment for 1d case
     else:
@@ -175,23 +172,25 @@ def dual(U, Y_hat, Y, eps=0):
 def train(net, optimizer, loader, ds, args):
     m = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
     k = args.k
+    print(ds.shape)
+    print(ds.min(), ds.max())
     for epoch in range(1, args.epoch+1):
-        for idx, Y in enumerate(loader):
-            u = torch.rand(size=(args.batch_size, args.dims)).cuda()
-            if args.gaussian_support:
-                u = m.icdf(u)
-            running_loss = 0.0
-            optimizer.zero_grad()
-            loss = 0
-            Y_hat = net(u)
-            loss += dual(U=u, Y_hat=Y_hat, Y=Y, eps=args.eps)
-            loss.backward()
-            optimizer.step()
+        #for idx, Y in enumerate(loader):
+        #u = torch.rand(size=(args.batch_size, args.dims)).cuda()
+        u = torch.rand(size=(5000, args.dims)).cuda()
+        if args.gaussian_support:
+            u = m.icdf(u)
+        running_loss = 0.0
+        optimizer.zero_grad()
+        Y_hat = net(u)
+        loss = dual(U=u, Y_hat=Y_hat, Y=ds, eps=args.eps)
+        loss.backward()
+        optimizer.step()
 
-            for p in positive_params:
-                p.data.copy_(torch.relu(p.data))
-            running_loss += loss.item()
-        if epoch % (args.epoch // 10) == 0:
+        for p in positive_params:
+            p.data.copy_(torch.relu(p.data))
+        running_loss += loss.item()
+        if epoch % (args.epoch // 50) == 0:
             print('%.5f' %
             (running_loss/args.iters))
     test(net, args, name='imgs/trained.png', loader=loader, Y=ds)
@@ -232,8 +231,8 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     torch.cuda.set_device('cuda:0')
-    net = ICNN_LastInp_Quadratic(input_dim=args.dims,#784,
-                                 hidden_dim=512,#1024,
+    net = ICNN_LastInp_Quadratic(input_dim=784,#args.dims
+                                 hidden_dim=1024,#512
                                  activation='celu',
                                  num_layer=3)
                                  
@@ -247,8 +246,8 @@ if __name__ == "__main__":
     optimizer = optimizer(net, args)
     net.cuda()
     #train(net, optimizer, torch.from_numpy(ds.y).float().cuda(), args)
-    train(net, optimizer, loader, torch.from_numpy(ds.y).float().cuda(), args)
-    #train(net, optimizer, ds.y[:args.n].float().cuda(), args)
+    #train(net, optimizer, loader, torch.from_numpy(ds.y).float().cuda(), args)
+    train(net, optimizer, loader, ds.y[:args.n].float().cuda(), args)
 
     if args.genTheor:
         Y = torch.from_numpy(ds.y)
