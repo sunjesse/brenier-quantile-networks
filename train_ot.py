@@ -26,7 +26,7 @@ class Synthetic(data.Dataset):
     def __init__(self, args,  n=1000):
         self.n = n
         np.random.seed(0)
-        #self.y = np.random.normal(loc=0, scale=1, size=(self.n, 2))
+        self.y = np.random.normal(loc=0, scale=1, size=(self.n, 1))
         #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,2],[2,5]]), size=(self.n))
 
         #torch.manual_seed(0)
@@ -54,7 +54,7 @@ class Synthetic(data.Dataset):
                 gap_between_start_point=0.1, equal_interval=True)
         '''
 
-        self.y = np.random.standard_t(df=2, size=(args.n, 2))
+        #self.y = np.random.standard_t(df=2, size=(args.n, 2))
 
         #mnist
         '''
@@ -69,7 +69,7 @@ class Synthetic(data.Dataset):
     def __getitem__(self, i):
         if torch.is_tensor(self.y):
             return self.y[i].float()
-        return torch.from_numpy(self.y[i]).float()
+        return torch.from_numpy(self.y[i]).float().cuda()
 
 
 def plot2d(Y, name):
@@ -152,7 +152,7 @@ def l2_loss(output, target, tau):
     loss = torch.norm(loss, p=2, dim=1)
     return loss.mean()
 
-def test(net, args, name, loader):
+def test(net, args, name, loader, Y):
     net.eval()
 
     '''
@@ -164,14 +164,18 @@ def test(net, args, name, loader):
     #U = torch.rand(size=(64, 784), requires_grad=True).cuda()
     f = net(U).sum()
     Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
-
+    print(Y_hat.max(), Y_hat.min())
     inverse = net.invert(Y_hat)
     print(U)
-    print(inverse)
+    print(inverse.max(), inverse.min())
     m = (U - inverse).abs().max().item()
     print(m)
     print()
-    
+
+    data = torch.sort(Y, dim=0)[0]
+    Y = net.invert(data)
+    print(data)
+    print(Y)
     #mnist
     '''
     Y_hat = Y_hat.view(64, 28, 28).unsqueeze(1)
@@ -201,26 +205,26 @@ def dual(U, Y_hat, Y, eps=0):
     loss += eps*torch.mean(l)
     return loss
 
-def train(net, optimizer, Y, args):
+def train(net, optimizer, loader, ds, args):
     k = args.k
     for epoch in range(1, args.epoch+1):
-        #u = torch.rand(size=(args.n, args.dims)).cuda()
-        u = torch.rand(size=(args.n, 2)).cuda()
-        running_loss = 0.0
-        optimizer.zero_grad()
-        loss = 0
-        Y_hat = net(u)
-        loss += dual(U=u, Y_hat=Y_hat, Y=Y, eps=args.eps)
-        loss.backward()
-        optimizer.step()
+        for idx, Y in enumerate(loader):
+            u = torch.rand(size=(args.batch_size, args.dims)).cuda()
+            running_loss = 0.0
+            optimizer.zero_grad()
+            loss = 0
+            Y_hat = net(u)
+            loss += dual(U=u, Y_hat=Y_hat, Y=Y, eps=args.eps)
+            loss.backward()
+            optimizer.step()
 
-        for p in positive_params:
-            p.data.copy_(torch.relu(p.data))
-        running_loss += loss.item()
-        if epoch % (args.epoch // 50) == 0:
+            for p in positive_params:
+                p.data.copy_(torch.relu(p.data))
+            running_loss += loss.item()
+        if epoch % (args.epoch // 10) == 0:
             print('%.5f' %
             (running_loss/args.iters))
-    test(net, args, name='imgs/trained.png', loader=loader)
+    test(net, args, name='imgs/trained.png', loader=loader, Y=ds)
     '''
     Y = np.random.multivariate_normal(mean=[0, 0], cov=np.array([[1,2],[2,1]]), size=(args.batch_size*100))
     Y = torch.from_numpy(Y)
@@ -271,7 +275,8 @@ if __name__ == "__main__":
     loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
     optimizer = optimizer(net, args)
     net.cuda()
-    train(net, optimizer, torch.from_numpy(ds.y).float().cuda(), args)
+    #train(net, optimizer, torch.from_numpy(ds.y).float().cuda(), args)
+    train(net, optimizer, loader, torch.from_numpy(ds.y).float().cuda(), args)
     #train(net, optimizer, ds.y[:args.n].float().cuda(), args)
 
     if args.genTheor:

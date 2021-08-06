@@ -216,8 +216,9 @@ class ICNN_LastInp_Quadratic(nn.Module):
         self.last_convex = ConvexLinear(self.hidden_dim, 1, bias=False)
         self.last_linear = nn.Linear(self.input_dim, 1, bias=True)
 
-    def forward(self, input):
+        #self.m = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
 
+    def forward(self, input):
         x = self.activ_1(self.fc1_normal(input)).pow(2)
 
         for i in range(self.num_layer - 1):
