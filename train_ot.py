@@ -26,7 +26,7 @@ class Synthetic(data.Dataset):
     def __init__(self, args,  n=1000):
         self.n = n
         np.random.seed(0)
-        self.y = np.random.normal(loc=0, scale=1, size=(self.n, 1))
+        #self.y = np.random.normal(loc=0, scale=1, size=(self.n, 1))
         #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,2],[2,5]]), size=(self.n))
 
         #torch.manual_seed(0)
@@ -39,7 +39,7 @@ class Synthetic(data.Dataset):
         #self.y = torch.cat([self.y1, self.y2], dim=1)
 
         #exp
-        #self.y1 = np.random.exponential(scale=10, size=(self.n, 1))
+        #self.y = np.random.exponential(scale=10, size=(self.n, 1))
         #self.y2 = np.random.exponential(scale=2, size=(self.n, 1))
         #self.y = np.concatenate([self.y1, self.y2], axis=1)
         
@@ -48,11 +48,9 @@ class Synthetic(data.Dataset):
         #self.y = self.y['Y']
        
         #spiral
-        '''
         self.y, _ = make_spiral(n_samples_per_class=self.n, n_classes=1,
             n_rotations=2.5, gap_between_spiral=0.1, noise=0.2,
                 gap_between_start_point=0.1, equal_interval=True)
-        '''
 
         #self.y = np.random.standard_t(df=2, size=(args.n, 2))
 
@@ -113,45 +111,6 @@ def optimizer(net, args):
     elif args.optimizer.lower() == "radam":
            return radam.RAdam(net.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
  
-def gaussian_kernel(a, b):
-    dim1_1, dim1_2 = a.shape[0], b.shape[0]
-    depth = a.shape[1]
-    a = a.view(dim1_1, 1, depth)
-    b = b.view(1, dim1_2, depth)
-    a_core = a.expand(dim1_1, dim1_2, depth)
-    b_core = b.expand(dim1_1, dim1_2, depth)
-    numerator = (a_core - b_core).pow(2).mean(2)/depth
-    return torch.exp(-numerator)
-
-def MMD(a, b):
-    return gaussian_kernel(a, a).mean() + gaussian_kernel(b, b).mean() - 2*gaussian_kernel(a, b).mean()
-
-def l1_quantile_loss(output, target, tau, reduce=True):
-    u = target - output
-    loss = (tau - (u.detach() <= 0).float()).mul_(u)
-    return loss.mean() if reduce else loss
-
-def huber_quantile_loss(output, target, tau, net, k=0.02, reduce=True):
-    u = target - output
-    loss = (tau - (u.detach() <= 0).float()).mul_(u.detach().abs().clamp(max=k).div_(k)).mul_(u)
-
-    # covariance difference norm loss
-    #cl =  torch.matmul(net.L.weight, net.L.weight.permute(1, 0)) - utils.cov(target.permute(-1,-2))
-    #cl = torch.norm(cl, p=2)
-    return loss.mean() #+ cl
-
-def w_quantile_loss(output, target, tau, W, reduce=True):
-    u = target - output
-    loss = torch.matmul(u, W)*torch.matmul(tau - (u<0).float(), W.float())
-    return loss.mean() if reduce else loss
-
-def l2_loss(output, target, tau):
-    # assume tau univariate
-    u = target - output
-    loss = torch.abs(u) + (2*tau - 1)*u
-    loss = torch.norm(loss, p=2, dim=1)
-    return loss.mean()
-
 def test(net, args, name, loader, Y):
     net.eval()
 
@@ -160,22 +119,30 @@ def test(net, args, name, loader, Y):
         if hasattr(p, 'be_positive'):
             print(p)
     '''
+    if args.gaussian_support: 
+        gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
+
     U = torch.rand(size=(args.n, args.dims), requires_grad=True).cuda()
+    U_ = torch.clone(U)
+    if args.gaussian_support:
+        U = gauss.icdf(U)
+        
     #U = torch.rand(size=(64, 784), requires_grad=True).cuda()
     f = net(U).sum()
     Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
-    print(Y_hat.max(), Y_hat.min())
+    print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
     inverse = net.invert(Y_hat)
-    print(U)
-    print(inverse.max(), inverse.min())
-    m = (U - inverse).abs().max().item()
-    print(m)
-    print()
+    if args.gaussian_support:
+        inverse = gauss.cdf(inverse)
+    m = (U_ - inverse).abs().max().item()
+    print("max error of inversion: " + str(m))
 
     data = torch.sort(Y, dim=0)[0]
-    Y = net.invert(data)
-    print(data)
-    print(Y)
+    z = net.invert(data)
+    if args.gaussian_support:
+        z = gauss.cdf(z)
+    print("sampled points from target, sorted: " + str(data))
+    print("corresponding quantiles: " + str(z))
     #mnist
     '''
     Y_hat = Y_hat.view(64, 28, 28).unsqueeze(1)
@@ -206,10 +173,13 @@ def dual(U, Y_hat, Y, eps=0):
     return loss
 
 def train(net, optimizer, loader, ds, args):
+    m = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
     k = args.k
     for epoch in range(1, args.epoch+1):
         for idx, Y in enumerate(loader):
             u = torch.rand(size=(args.batch_size, args.dims)).cuda()
+            if args.gaussian_support:
+                u = m.icdf(u)
             running_loss = 0.0
             optimizer.zero_grad()
             loss = 0
@@ -237,7 +207,7 @@ if __name__ == "__main__":
     # optimization related arguments
     parser.add_argument('--batch_size', default=128, type=int,
                         help='input batch size')
-    parser.add_argument('--epoch', default=1000, type=int,
+    parser.add_argument('--epoch', default=100, type=int,
                         help='epochs to train for')
     parser.add_argument('--optimizer', default='adam', help='optimizer')
     parser.add_argument('--lr', default=0.005, type=float, help='LR')
@@ -253,6 +223,7 @@ if __name__ == "__main__":
     parser.add_argument('--n', default=5000, type=int)
     parser.add_argument('--k', default=100, type=int)
     parser.add_argument('--genTheor', action='store_true')
+    parser.add_argument('--gaussian_support', action='store_true')
     parser.add_argument('--eps', default=0, type=float)
     args = parser.parse_args()
 
