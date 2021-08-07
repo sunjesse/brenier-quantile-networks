@@ -229,7 +229,7 @@ class ICNN_LastInp_Quadratic(nn.Module):
                 x).add(self.normal[i](input)))
 
         x = self.last_convex(x).add(self.last_linear(input).pow(2))
-        quad = (input.view(input.size(0), -1) ** 2).sum(1, keepdim=True) / 2#input.shape[1]
+        quad = (input.view(input.size(0), -1) ** 2).sum(1, keepdim=True) / (2*input.shape[1])
         #print(nn.functional.softplus(self.w0))
         return x + quad#nn.functional.softplus(self.w1) * x + nn.functional.softplus(self.w0) * quad
 

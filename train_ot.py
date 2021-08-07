@@ -26,7 +26,7 @@ class Synthetic(data.Dataset):
     def __init__(self, args,  n=1000):
         self.n = n
         np.random.seed(0)
-        self.y = np.random.normal(loc=0, scale=1, size=(self.n, 1))
+        #self.y = np.random.normal(loc=0, scale=1, size=(self.n, 1))
         #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,2],[2,5]]), size=(self.n))
 
         #torch.manual_seed(0)
@@ -39,7 +39,7 @@ class Synthetic(data.Dataset):
         #self.y = torch.cat([self.y1, self.y2], dim=1)
 
         #exp
-        #self.y = np.random.exponential(scale=10, size=(self.n, 1))
+        #self.y1 = np.random.exponential(scale=10, size=(self.n, 1))
         #self.y2 = np.random.exponential(scale=2, size=(self.n, 1))
         #self.y = np.concatenate([self.y1, self.y2], axis=1)
         
@@ -56,9 +56,9 @@ class Synthetic(data.Dataset):
         #self.y = np.random.standard_t(df=2, size=(args.n, 2))
 
         #mnist
-        #transform=transforms.Compose([transforms.ToTensor()])
-        #self.y_ = datasets.MNIST('../data', train=True, download=True,transform=transform)
-        #self.y = self.y_.data.flatten(-2, -1).float()/255.
+        transform=transforms.Compose([transforms.ToTensor()])
+        self.y_ = datasets.MNIST('../data', train=True, download=True,transform=transform)
+        self.y = self.y_.data.flatten(-2, -1).float()/255.
 
     def __len__(self):
         return 5000# len(self.y)#self.y
@@ -98,11 +98,6 @@ class icq(nn.Module):
         Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
         return Y_hat
         
-    def h(self, x):
-        return torch.sqrt(1+3*x**2) + 2*x
-
-    def ih(self, x):
-        return -torch.sqrt(1+3*x**2) + 2*x
 
 def plot2d(Y, name):
     Y = Y.detach().cpu().numpy()
@@ -143,6 +138,9 @@ def optimizer(net, args):
     elif args.optimizer.lower() == "adam":
 	       return optim.Adam(net.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
 
+def unif(size, eps=1E-7):
+    return torch.clamp(torch.rand(size).cuda(), min=eps, max=1-eps)
+
 def test(net, args, name, loader, Y):
     net.eval()
 
@@ -151,14 +149,20 @@ def test(net, args, name, loader, Y):
         if hasattr(p, 'be_positive'):
             print(p)
     '''
-    U = torch.rand(size=(args.n, args.dims), requires_grad=True).cuda()
-    #U = torch.rand(size=(5000, 2), requires_grad=True).cuda()
-    Y_hat = net.grad(U)
+    #U = torch.rand(size=(args.n, args.dims), requires_grad=True).cuda()
+    gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
+    U_ = unif(size=(64, args.dims))
+    U = gauss.icdf(U_)
+    U.requires_grad = True
+    f = net(U).sum()
+    Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
+    #Y_hat = net.grad(U)
     print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
 
-    inverse = net.invert(Y_hat)
-    m = (U - inverse).abs().max().item()
-    print("max error of inversion: " + str(m))
+    #inverse = net.invert(Y_hat)
+    #m = (U - inverse).abs().max().item()
+    #print("max error of inversion: " + str(m))
+    '''
     data = torch.sort(Y, dim=0)[0]
     z = net.invert(data)
     print("sampled points from target, sorted: " + str(data))
@@ -175,6 +179,7 @@ def test(net, args, name, loader, Y):
     else:
         plot2d(Y_hat, name='imgs/2d.png') # 2d contour plot
         plotaxis(Y_hat, name='imgs/train')
+    '''
 
 positive_params = []
 
@@ -197,12 +202,14 @@ def train(net, optimizer, loader, ds, args):
     print(ds.shape)
     print(ds.min(), ds.max())
     #eg = Rings()#EightGaussian()
+    gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
     for epoch in range(1, args.epoch+1):
         
         #for idx, Y in enumerate(loader):
         #u = torch.rand(size=(args.batch_size, args.dims)).cuda()
         #Y = eg.sample(5000).cuda()
-        u = torch.rand(size=(args.n, args.dims)).cuda()
+        u = unif(size=(args.n, args.dims))#torch.rand(size=(args.n, args.dims)).cuda()
+        u = gauss.icdf(u)
         running_loss = 0.0
         optimizer.zero_grad()
         Y_hat = net(u)
@@ -218,8 +225,7 @@ def train(net, optimizer, loader, ds, args):
             (running_loss/args.iters))
     test(net, args, name='imgs/trained.png', loader=loader, Y=ds)
     '''
-    Y = np.random.multivariate_normal(mean=[0, 0], cov=np.array([[1,2],[2,1]]), size=(args.batch_size*100))
-    Y = torch.from_numpy(Y)
+    Y = eg.sample(5000).cuda()
     plotaxis(Y, name='imgs/theor')
     plot2d(Y, name='imgs/theor.png')
     '''
@@ -254,11 +260,13 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     torch.cuda.set_device('cuda:0')
-    net_ = ICNN_LastInp_Quadratic(input_dim=args.dims,
-                                 hidden_dim=512,#1024,#512
+    net = ICNN_LastInp_Quadratic(input_dim=args.dims,
+                                 hidden_dim=1024,#1024,#512
                                  activation='celu',
                                  num_layer=3)
-    net = icq(net_, gs=args.gaussian_support)
+
+    #net = icq(net_, gs=args.gaussian_support)
+
     for p in list(net.parameters()):
         if hasattr(p, 'be_positive'):
             positive_params.append(p)
@@ -268,10 +276,9 @@ if __name__ == "__main__":
     loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
     optimizer = optimizer(net, args)
     net.cuda()
-    #train(net, optimizer, torch.from_numpy(ds.y).float().cuda(), args)
-    train(net, optimizer, loader, torch.from_numpy(ds.y).float().cuda(), args)
+    #train(net, optimizer, loader, torch.from_numpy(ds.y).float().cuda(), args)
     #mnist
-    #train(net, optimizer, loader, ds.y[:args.n].float().cuda(), args)
+    train(net, optimizer, loader, ds.y[:args.n].float().cuda(), args)
 
     if args.genTheor:
         Y = torch.from_numpy(ds.y)
