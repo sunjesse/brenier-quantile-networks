@@ -26,7 +26,7 @@ class Synthetic(data.Dataset):
     def __init__(self, args,  n=1000):
         self.n = n
         np.random.seed(0)
-        #self.y = np.random.normal(loc=0, scale=1, size=(self.n, 1))
+        self.y = np.random.normal(loc=0, scale=1, size=(self.n, 1))
         #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,2],[2,5]]), size=(self.n))
 
         #torch.manual_seed(0)
@@ -56,9 +56,9 @@ class Synthetic(data.Dataset):
         #self.y = np.random.standard_t(df=2, size=(args.n, 2))
 
         #mnist
-        transform=transforms.Compose([transforms.ToTensor()])
-        self.y_ = datasets.MNIST('../data', train=True, download=True,transform=transform)
-        self.y = self.y_.data.flatten(-2, -1).float()/255.
+        #transform=transforms.Compose([transforms.ToTensor()])
+        #self.y_ = datasets.MNIST('../data', train=True, download=True,transform=transform)
+        #self.y = self.y_.data.flatten(-2, -1).float()/255.
 
     def __len__(self):
         return 5000# len(self.y)#self.y
@@ -68,6 +68,41 @@ class Synthetic(data.Dataset):
             return self.y[i].cuda() / 255.
         return torch.from_numpy(self.y[i]).float().cuda()
 
+class icq(nn.Module):
+    def __init__(self, net, gs=True):
+        super(icq, self).__init__()
+        self.net = net
+        self.gs = gs
+        self.gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
+
+    def forward(self, u):
+        if self.gs:
+            U = self.gauss.icdf(u)
+        else:
+            U = u
+            u = None
+        return self.net(U)
+
+    def invert(self, y):
+        u = self.net.invert(y)
+        if self.gs:
+            u = self.gauss.cdf(u)
+        return u
+    
+    def grad(self, u):
+        if self.gs:
+            U = self.gauss.icdf(u)
+        else:
+            U = u
+        f = self.net(U).sum()
+        Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
+        return Y_hat
+        
+    def h(self, x):
+        return torch.sqrt(1+3*x**2) + 2*x
+
+    def ih(self, x):
+        return -torch.sqrt(1+3*x**2) + 2*x
 
 def plot2d(Y, name):
     Y = Y.detach().cpu().numpy()
@@ -107,9 +142,7 @@ def optimizer(net, args):
 	       return optim.SGD(net.parameters(), lr=args.lr, momentum=args.beta1, nesterov=args.nesterov)
     elif args.optimizer.lower() == "adam":
 	       return optim.Adam(net.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
-    elif args.optimizer.lower() == "radam":
-           return radam.RAdam(net.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
- 
+
 def test(net, args, name, loader, Y):
     net.eval()
 
@@ -118,27 +151,16 @@ def test(net, args, name, loader, Y):
         if hasattr(p, 'be_positive'):
             print(p)
     '''
-    if args.gaussian_support: 
-        gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
-
-    #U = torch.rand(size=(args.n, args.dims), requires_grad=True).cuda()
-    U = torch.rand(size=(64, 784), requires_grad=True).cuda()
-    U_ = torch.clone(U)
-    if args.gaussian_support:
-        U = gauss.icdf(U)
-    f = net(U).sum()
-    Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
+    U = torch.rand(size=(args.n, args.dims), requires_grad=True).cuda()
+    #U = torch.rand(size=(5000, 2), requires_grad=True).cuda()
+    Y_hat = net.grad(U)
     print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
-    '''
+
     inverse = net.invert(Y_hat)
-    if args.gaussian_support:
-        inverse = gauss.cdf(inverse)
-    m = (U_ - inverse).abs().max().item()
+    m = (U - inverse).abs().max().item()
     print("max error of inversion: " + str(m))
     data = torch.sort(Y, dim=0)[0]
     z = net.invert(data)
-    if args.gaussian_support:
-        z = gauss.cdf(z)
     print("sampled points from target, sorted: " + str(data))
     print("corresponding quantiles: " + str(z))
     '''
@@ -147,6 +169,7 @@ def test(net, args, name, loader, Y):
     utils.save_image(utils.make_grid(Y_hat),
         './mnist.png')
     return
+    '''
     if args.dims == 1:
         histogram(Y_hat, name) # uncomment for 1d case
     else:
@@ -170,16 +193,16 @@ def dual(U, Y_hat, Y, eps=0):
     return loss
 
 def train(net, optimizer, loader, ds, args):
-    m = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
     k = args.k
     print(ds.shape)
     print(ds.min(), ds.max())
+    #eg = Rings()#EightGaussian()
     for epoch in range(1, args.epoch+1):
+        
         #for idx, Y in enumerate(loader):
         #u = torch.rand(size=(args.batch_size, args.dims)).cuda()
-        u = torch.rand(size=(5000, args.dims)).cuda()
-        if args.gaussian_support:
-            u = m.icdf(u)
+        #Y = eg.sample(5000).cuda()
+        u = torch.rand(size=(args.n, args.dims)).cuda()
         running_loss = 0.0
         optimizer.zero_grad()
         Y_hat = net(u)
@@ -231,11 +254,11 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     torch.cuda.set_device('cuda:0')
-    net = ICNN_LastInp_Quadratic(input_dim=784,#args.dims
-                                 hidden_dim=1024,#512
+    net_ = ICNN_LastInp_Quadratic(input_dim=args.dims,
+                                 hidden_dim=512,#1024,#512
                                  activation='celu',
                                  num_layer=3)
-                                 
+    net = icq(net_, gs=args.gaussian_support)
     for p in list(net.parameters()):
         if hasattr(p, 'be_positive'):
             positive_params.append(p)
@@ -246,8 +269,9 @@ if __name__ == "__main__":
     optimizer = optimizer(net, args)
     net.cuda()
     #train(net, optimizer, torch.from_numpy(ds.y).float().cuda(), args)
-    #train(net, optimizer, loader, torch.from_numpy(ds.y).float().cuda(), args)
-    train(net, optimizer, loader, ds.y[:args.n].float().cuda(), args)
+    train(net, optimizer, loader, torch.from_numpy(ds.y).float().cuda(), args)
+    #mnist
+    #train(net, optimizer, loader, ds.y[:args.n].float().cuda(), args)
 
     if args.genTheor:
         Y = torch.from_numpy(ds.y)

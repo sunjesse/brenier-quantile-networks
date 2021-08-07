@@ -200,6 +200,9 @@ class ICNN_LastInp_Quadratic(nn.Module):
         self.activation = activation
         self.num_layer = num_layer
 
+        self.w0 = torch.nn.Parameter(torch.log(torch.exp(torch.ones(1)) - 1), requires_grad=True)
+        self.w1 = torch.nn.Parameter(torch.zeros(1))
+
         self.fc1_normal = nn.Linear(self.input_dim, self.hidden_dim, bias=True)
         self.activ_1 = get_activation(self.activation)
 
@@ -226,8 +229,9 @@ class ICNN_LastInp_Quadratic(nn.Module):
                 x).add(self.normal[i](input)))
 
         x = self.last_convex(x).add(self.last_linear(input).pow(2))
-        quad = (input.view(input.size(0), -1) ** 2).sum(1, keepdim=True) / input.shape[1]
-        return x + quad
+        quad = (input.view(input.size(0), -1) ** 2).sum(1, keepdim=True) / 2#input.shape[1]
+        #print(nn.functional.softplus(self.w0))
+        return x + quad#nn.functional.softplus(self.w1) * x + nn.functional.softplus(self.w0) * quad
 
     def invert(self, y, max_iter=1000000, lr=1.0, tol=1e-12):
         x = y.clone().detach().requires_grad_(True)

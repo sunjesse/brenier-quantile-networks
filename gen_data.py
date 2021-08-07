@@ -1,6 +1,8 @@
 import numpy as np
 from sklearn.utils import check_random_state
-
+from torch.utils.data import Dataset as Dataset
+from sklearn.utils import shuffle as util_shuffle
+import torch
 
 def make_moons(n_samples=100, xy_ratio=1.0, x_gap=0.0, y_gap=0.0, noise=None, seed=None):
     """
@@ -142,3 +144,81 @@ def make_spiral(n_samples_per_class=300, n_classes=2, n_rotations=3, gap_between
     labels = np.asarray([c for c in range(n_classes) for _ in range(n_samples_per_class)])
 
     return X, labels
+
+class ToyDataset(Dataset):
+    data = dict()
+    data_names = []
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.data[cls.__name__] = cls
+        cls.data_names.append(cls.__name__)
+
+    def __init__(self, n=50000):
+        self.data = self.sample(n)
+
+    def sample(self, batch_size):
+        raise NotImplementedError
+
+    def __getitem__(self, index):
+        return self.data[index]
+
+    def __len__(self):
+        return len(self.data)
+
+
+class EightGaussian(ToyDataset):
+    def sample(self, batch_size, return_idx=False):
+        scale = 4.
+        centers = [(1, 0), (-1, 0), (0, 1), (0, -1), (1. / np.sqrt(2), 1. / np.sqrt(2)),
+                   (1. / np.sqrt(2), -1. / np.sqrt(2)), (-1. / np.sqrt(2),
+                                                         1. / np.sqrt(2)), (-1. / np.sqrt(2), -1. / np.sqrt(2))]
+        centers = [(scale * x, scale * y) for x, y in centers]
+
+        dataset = []
+        indices = []
+        for i in range(batch_size):
+            point = np.random.randn(2) * 0.5
+            idx = np.random.randint(8)
+            center = centers[idx]
+            point[0] += center[0]
+            point[1] += center[1]
+            dataset.append(point)
+            indices.append(idx)
+        dataset = np.array(dataset, dtype='float32')
+        dataset /= 1.414
+        if return_idx:
+            return torch.from_numpy(dataset), torch.from_numpy(np.array(indices))
+        else:
+            return torch.from_numpy(dataset)
+
+class Rings(ToyDataset):
+    def sample(self, batch_size):
+        n_samples4 = n_samples3 = n_samples2 = batch_size // 4
+        n_samples1 = batch_size - n_samples4 - n_samples3 - n_samples2
+
+        # so as not to have the first point = last point, we set endpoint=False
+        linspace4 = np.linspace(0, 2 * np.pi, n_samples4, endpoint=False)
+        linspace3 = np.linspace(0, 2 * np.pi, n_samples3, endpoint=False)
+        linspace2 = np.linspace(0, 2 * np.pi, n_samples2, endpoint=False)
+        linspace1 = np.linspace(0, 2 * np.pi, n_samples1, endpoint=False)
+
+        circ4_x = np.cos(linspace4)
+        circ4_y = np.sin(linspace4)
+        circ3_x = np.cos(linspace4) * 0.75
+        circ3_y = np.sin(linspace3) * 0.75
+        circ2_x = np.cos(linspace2) * 0.5
+        circ2_y = np.sin(linspace2) * 0.5
+        circ1_x = np.cos(linspace1) * 0.25
+        circ1_y = np.sin(linspace1) * 0.25
+
+        X = np.vstack([
+            np.hstack([circ4_x, circ3_x, circ2_x, circ1_x]),
+            np.hstack([circ4_y, circ3_y, circ2_y, circ1_y])
+        ]).T * 3.0
+        X = util_shuffle(X)
+
+        # Add noise
+        X = X + np.random.normal(scale=0.08, size=X.shape)
+
+        return torch.from_numpy(X.astype("float32"))
