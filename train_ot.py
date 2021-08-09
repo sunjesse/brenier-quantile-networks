@@ -61,11 +61,11 @@ class Synthetic(data.Dataset):
         self.y = self.y_.data.flatten(-2, -1).float()/255.
 
     def __len__(self):
-        return 5000# len(self.y)#self.y
+        return len(self.y)#self.y
 
     def __getitem__(self, i):
         if torch.is_tensor(self.y):
-            return self.y[i].cuda() / 255.
+            return self.y[i].cuda()
         return torch.from_numpy(self.y[i]).float().cuda()
 
 class icq(nn.Module):
@@ -204,25 +204,25 @@ def train(net, optimizer, loader, ds, args):
     #eg = Rings()#EightGaussian()
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
     for epoch in range(1, args.epoch+1):
-        
-        #for idx, Y in enumerate(loader):
+        running_loss = 0.0
+        for idx, Y in enumerate(loader):
         #u = torch.rand(size=(args.batch_size, args.dims)).cuda()
         #Y = eg.sample(5000).cuda()
-        u = unif(size=(args.n, args.dims))#torch.rand(size=(args.n, args.dims)).cuda()
-        u = gauss.icdf(u)
-        running_loss = 0.0
-        optimizer.zero_grad()
-        Y_hat = net(u)
-        loss = dual(U=u, Y_hat=Y_hat, Y=ds, eps=args.eps)
-        loss.backward()
-        optimizer.step()
+            u = unif(size=(args.n, args.dims))#torch.rand(size=(args.n, args.dims)).cuda()
+            u = gauss.icdf(u)
+            optimizer.zero_grad()
+            Y_hat = net(u)
+            loss = dual(U=u, Y_hat=Y_hat, Y=Y, eps=args.eps)
+            loss.backward()
+            optimizer.step()
+            for p in positive_params:
+                p.data.copy_(torch.relu(p.data))
+            running_loss += loss.item()
 
-        for p in positive_params:
-            p.data.copy_(torch.relu(p.data))
-        running_loss += loss.item()
         if epoch % (args.epoch // 50) == 0:
             print('%.5f' %
-            (running_loss/args.iters))
+            (running_loss/idx))
+
     test(net, args, name='imgs/trained.png', loader=loader, Y=ds)
     '''
     Y = eg.sample(5000).cuda()
@@ -233,7 +233,7 @@ def train(net, optimizer, loader, ds, args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # optimization related arguments
-    parser.add_argument('--batch_size', default=128, type=int,
+    parser.add_argument('--batch_size', default=512, type=int,
                         help='input batch size')
     parser.add_argument('--epoch', default=100, type=int,
                         help='epochs to train for')
