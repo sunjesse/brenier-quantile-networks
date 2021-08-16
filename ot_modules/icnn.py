@@ -221,7 +221,7 @@ class ICNN_LastInp_Quadratic(nn.Module):
 
         #self.m = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
 
-    def forward(self, input):
+    def forward(self, input, grad=False):
         x = self.activ_1(self.fc1_normal(input)).pow(2)
 
         for i in range(self.num_layer - 1):
@@ -229,9 +229,10 @@ class ICNN_LastInp_Quadratic(nn.Module):
                 x).add(self.normal[i](input)))
 
         x = self.last_convex(x).add(self.last_linear(input).pow(2))
-        quad = (input.view(input.size(0), -1) ** 2).sum(1, keepdim=True) / (2*input.shape[1])
-        #print(nn.functional.softplus(self.w0))
-        return x + quad#nn.functional.softplus(self.w1) * x + nn.functional.softplus(self.w0) * quad
+        if grad:
+            quad = (input.view(input.size(0), -1) ** 2).sum(1, keepdim=True) / 2
+            return x + quad
+        return x #nn.functional.softplus(self.w1) * x + nn.functional.softplus(self.w0) * quad
 
     def invert(self, y, max_iter=1000000, lr=1.0, tol=1e-12):
         x = y.clone().detach().requires_grad_(True)

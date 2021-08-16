@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import utils
 from utils import truncated_normal
-from ot_modules.icnn import *
+from ot_modules.sos import *
 from gen_data import *
 from torchvision import datasets, transforms, utils
 
@@ -26,8 +26,8 @@ class Synthetic(data.Dataset):
     def __init__(self, args,  n=1000):
         self.n = n
         np.random.seed(0)
-        self.y = np.random.normal(loc=0, scale=1, size=(self.n, 1))
-        #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,2],[2,5]]), size=(self.n))
+        #self.y = np.random.normal(loc=0, scale=1, size=(self.n, 1))
+        self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,2],[2,5]]), size=(self.n))
 
         #torch.manual_seed(0)
         #self.u = torch.rand(self.n, args.dims)
@@ -39,7 +39,7 @@ class Synthetic(data.Dataset):
         #self.y = torch.cat([self.y1, self.y2], dim=1)
 
         #exp
-        #self.y1 = np.random.exponential(scale=10, size=(self.n, 1))
+        #self.y = np.random.exponential(scale=10, size=(self.n, 1))
         #self.y2 = np.random.exponential(scale=2, size=(self.n, 1))
         #self.y = np.concatenate([self.y1, self.y2], axis=1)
         
@@ -69,37 +69,6 @@ class Synthetic(data.Dataset):
         if torch.is_tensor(self.y):
             return self.y[i].cuda()
         return torch.from_numpy(self.y[i]).float().cuda()
-
-class icq(nn.Module):
-    def __init__(self, net, gs=True):
-        super(icq, self).__init__()
-        self.net = net
-        self.gs = gs
-        self.gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
-
-    def forward(self, u):
-        if self.gs:
-            U = self.gauss.icdf(u)
-        else:
-            U = u
-            u = None
-        return self.net(U)
-
-    def invert(self, y):
-        u = self.net.invert(y)
-        if self.gs:
-            u = self.gauss.cdf(u)
-        return u
-    
-    def grad(self, u):
-        if self.gs:
-            U = self.gauss.icdf(u)
-        else:
-            U = u
-        f = self.net(U).sum()
-        Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
-        return Y_hat
-        
 
 def plot2d(Y, name):
     Y = Y.detach().cpu().numpy()
@@ -151,16 +120,19 @@ def test(net, args, name, loader, Y):
         if hasattr(p, 'be_positive'):
             print(p)
     '''
+
     #U = torch.rand(size=(args.n, args.dims), requires_grad=True).cuda()
-    gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
-    U_ = unif(size=(2000, args.dims))
-    U = gauss.icdf(U_)
+    #gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
+    U = unif(size=(2000, args.dims))
+    #U = gauss.icdf(U_)
     U.requires_grad = True
-    f = net.forward(U, grad=True).sum()
+    f = net.forward(U, grad=False).sum()
     Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
+    print(Y_hat.shape)
     #Y_hat = net.grad(U)
     print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
 
+    '''
     inverse = net.invert(Y_hat)
     m = (U - inverse).abs().max().item()
     print("max error of inversion: " + str(m))
@@ -169,6 +141,7 @@ def test(net, args, name, loader, Y):
     z = gauss.cdf(z)
     print("sampled points from target, sorted: " + str(data))
     print("corresponding quantiles: " + str(z))
+    '''
     #mnist
     '''
     Y_hat = Y_hat.view(64, 28, 28).unsqueeze(1)
@@ -209,8 +182,8 @@ def train(net, optimizer, loader, ds, args):
         #for idx, Y in enumerate(loader):
         #u = torch.rand(size=(args.batch_size, args.dims)).cuda()
         #Y = eg.sample(5000).cuda()
-        u = unif(size=(args.batch_size, args.dims))#torch.rand(size=(args.n, args.dims)).cuda()
-        u = gauss.icdf(u)
+        u = unif(size=(args.n, args.dims))#torch.rand(size=(args.n, args.dims)).cuda()
+        #u = gauss.icdf(u)
         optimizer.zero_grad()
         Y_hat = net(u)
         loss = dual(U=u, Y_hat=Y_hat, Y=ds, eps=args.eps)
@@ -261,12 +234,15 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     torch.cuda.set_device('cuda:0')
-    net = ICNN_LastInp_Quadratic(input_dim=args.dims,
-                                 hidden_dim=512,#1024,#512
-                                 activation='celu',
-                                 num_layer=3)
+    net = SOSPotential(input_size=args.dims,
+                      hidden_size=512,
+                      k=5,
+                      r=3,
+                      n_blocks=1)
 
-    #net = icq(net_, gs=args.gaussian_support)
+    for module in net.modules():
+        if isinstance(module, nn.Linear):
+            nn.init.orthogonal_(module.weight)
 
     for p in list(net.parameters()):
         if hasattr(p, 'be_positive'):
@@ -274,8 +250,8 @@ if __name__ == "__main__":
         p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
 
     ds = Synthetic(args, n=args.n)
-    loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
     optimizer = optimizer(net, args)
+    loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
     net.cuda()
     train(net, optimizer, loader, torch.from_numpy(ds.y).float().cuda(), args)
     #mnist

@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import torchvision
 from torch.utils import data
 import argparse
 import numpy as np
@@ -70,36 +71,138 @@ class Synthetic(data.Dataset):
             return self.y[i].cuda()
         return torch.from_numpy(self.y[i]).float().cuda()
 
-class icq(nn.Module):
-    def __init__(self, net, gs=True):
-        super(icq, self).__init__()
-        self.net = net
-        self.gs = gs
-        self.gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
+class VAE(nn.Module):
+    def __init__(self, image_size, channel_num, kernel_num, z_size):
+        # configurations
+        super().__init__()
+        self.image_size = image_size
+        self.channel_num = channel_num
+        self.kernel_num = kernel_num
+        self.z_size = z_size
 
-    def forward(self, u):
-        if self.gs:
-            U = self.gauss.icdf(u)
-        else:
-            U = u
-            u = None
-        return self.net(U)
+        # encoder
+        self.encoder = nn.Sequential(
+            self._conv(channel_num, kernel_num // 4),
+            self._conv(kernel_num // 4, kernel_num // 2),
+            self._conv(kernel_num // 2, kernel_num),
+        )
 
-    def invert(self, y):
-        u = self.net.invert(y)
-        if self.gs:
-            u = self.gauss.cdf(u)
-        return u
-    
-    def grad(self, u):
-        if self.gs:
-            U = self.gauss.icdf(u)
-        else:
-            U = u
-        f = self.net(U).sum()
-        Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
-        return Y_hat
-        
+        # encoded feature's size and volume
+        self.feature_size = image_size // 8
+        self.feature_volume = kernel_num * (self.feature_size ** 2)
+
+        # q
+        self.q_mean = self._linear(self.feature_volume, z_size, relu=False)
+        self.q_logvar = self._linear(self.feature_volume, z_size, relu=False)
+
+        # projection
+        self.project = self._linear(z_size, self.feature_volume, relu=False)
+
+        # decoder
+        self.decoder = nn.Sequential(
+            self._deconv(kernel_num, kernel_num // 2),
+            self._deconv(kernel_num // 2, kernel_num // 4),
+            self._deconv(kernel_num // 4, channel_num),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        # encode x
+        encoded = self.encoder(x)
+
+        # sample latent code z from q given x.
+        mean, logvar = self.q(encoded)
+        z = self.z(mean, logvar)
+        z_projected = self.project(z).view(
+            -1, self.kernel_num,
+            self.feature_size,
+            self.feature_size,
+        )
+
+        # reconstruct x from z
+        x_reconstructed = self.decoder(z_projected)
+
+        # return the parameters of distribution of q given x and the
+        # reconstructed image.
+        return (mean, logvar), x_reconstructed, z
+
+    # ==============
+    # VAE components
+    # ==============
+
+    def q(self, encoded):
+        unrolled = encoded.view(-1, self.feature_volume)
+        return self.q_mean(unrolled), self.q_logvar(unrolled)
+
+    def z(self, mean, logvar):
+        std = logvar.mul(0.5).exp_()
+        eps = (
+            Variable(torch.randn(std.size())).cuda() if self._is_on_cuda else
+            Variable(torch.randn(std.size()))
+        )
+        return eps.mul(std).add_(mean)
+
+    # =====
+    # Utils
+    # =====
+
+    @property
+    def sample(self, size):
+        z = Variable(
+            torch.randn(size, self.z_size).cuda() if self._is_on_cuda() else
+            torch.randn(size, self.z_size)
+        )
+        z_projected = self.project(z).view(
+            -1, self.kernel_num,
+            self.feature_size,
+            self.feature_size,
+        )
+        return self.decoder(z_projected).data
+
+    def _is_on_cuda(self):
+        return next(self.parameters()).is_cuda
+
+    # ======
+    # Layers
+    # ======
+
+    def _conv(self, channel_size, kernel_num):
+        return nn.Sequential(
+            nn.Conv2d(
+                channel_size, kernel_num,
+                kernel_size=4, stride=2, padding=1,
+            ),
+            nn.BatchNorm2d(kernel_num),
+            nn.ReLU(),
+        )
+
+    def _deconv(self, channel_num, kernel_num):
+        return nn.Sequential(
+            nn.ConvTranspose2d(
+                channel_num, kernel_num,
+                kernel_size=4, stride=2, padding=1,
+            ),
+            nn.BatchNorm2d(kernel_num),
+            nn.ReLU(),
+        )
+
+    def _linear(self, in_size, out_size, relu=True):
+        return nn.Sequential(
+            nn.Linear(in_size, out_size),
+            nn.ReLU(),
+        ) if relu else nn.Linear(in_size, out_size)
+
+
+def loss_function(recon_x, x, mu, logvar):
+    BCE = F.binary_cross_entropy(recon_x, x, reduction='mean')
+
+    # see Appendix B from VAE paper:
+    # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
+    # https://arxiv.org/abs/1312.6114
+    # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
+    KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+
+    return BCE + args.kl_scale * KLD
 
 def plot2d(Y, name):
     Y = Y.detach().cpu().numpy()
@@ -132,18 +235,19 @@ def gaussian_mixture(means, stds, p, args):
         mix[indices] = g[indices]
     return mix
 
-def optimizer(net, args):
-    assert args.optimizer.lower() in ["sgd", "adam", "radam"], "Invalid Optimizer"
+def optimizer(net, vae, args):
+    assert args.optimizer.lower() in ["sgd", "adam"], "Invalid Optimizer"
 
+    params = list(net.parameters()) + list(vae.parameters())
     if args.optimizer.lower() == "sgd":
-	       return optim.SGD(net.parameters(), lr=args.lr, momentum=args.beta1, nesterov=args.nesterov)
+	       return optim.SGD(params, lr=args.lr, momentum=args.beta1, nesterov=args.nesterov)
     elif args.optimizer.lower() == "adam":
-	       return optim.Adam(net.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
+	       return optim.Adam(params, lr=args.lr, betas=(args.beta1, args.beta2))
 
 def unif(size, eps=1E-7):
     return torch.clamp(torch.rand(size).cuda(), min=eps, max=1-eps)
 
-def test(net, args, name, loader, Y):
+def test(net, args, name, loader, vae):
     net.eval()
 
     '''
@@ -153,29 +257,17 @@ def test(net, args, name, loader, Y):
     '''
     #U = torch.rand(size=(args.n, args.dims), requires_grad=True).cuda()
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
-    U_ = unif(size=(2000, args.dims))
+    U_ = unif(size=(64, args.dims))
     U = gauss.icdf(U_)
     U.requires_grad = True
     f = net.forward(U, grad=True).sum()
     Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
-    #Y_hat = net.grad(U)
-    print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
-
-    inverse = net.invert(Y_hat)
-    m = (U - inverse).abs().max().item()
-    print("max error of inversion: " + str(m))
-    data = torch.sort(Y, dim=0)[0]
-    z = net.invert(data)
-    z = gauss.cdf(z)
-    print("sampled points from target, sorted: " + str(data))
-    print("corresponding quantiles: " + str(z))
-    #mnist
-    '''
-    Y_hat = Y_hat.view(64, 28, 28).unsqueeze(1)
+    Y_hat = vae.project(Y_hat).view(-1, vae.kernel_num, vae.feature_size, vae.feature_size)
+    Y_hat = vae.decoder(Y_hat)
+    #print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
     utils.save_image(utils.make_grid(Y_hat),
-        './mnist.png')
+        './cifar.png')
     return
-    '''
     if args.dims == 1:
         histogram(Y_hat, name) # uncomment for 1d case
     else:
@@ -198,33 +290,29 @@ def dual(U, Y_hat, Y, eps=0):
     loss += eps*torch.mean(l)
     return loss
 
-def train(net, optimizer, loader, ds, args):
+def train(net, optimizer, loader, vae, args):
     k = args.k
-    print(ds.shape)
-    print(ds.min(), ds.max())
-    #eg = Rings()#EightGaussian()
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
-        #for idx, Y in enumerate(loader):
-        #u = torch.rand(size=(args.batch_size, args.dims)).cuda()
-        #Y = eg.sample(5000).cuda()
-        u = unif(size=(args.batch_size, args.dims))#torch.rand(size=(args.n, args.dims)).cuda()
-        u = gauss.icdf(u)
-        optimizer.zero_grad()
-        Y_hat = net(u)
-        loss = dual(U=u, Y_hat=Y_hat, Y=ds, eps=args.eps)
-        loss.backward()
-        optimizer.step()
-        for p in positive_params:
-            p.data.copy_(torch.relu(p.data))
-        running_loss += loss.item()
+        for idx, (x, label) in enumerate(loader):
+            x = x.cuda()
+            u = unif(size=(args.batch_size, args.dims))
+            u = gauss.icdf(u)
+            optimizer.zero_grad()
+            Y_hat = net(u)
+            (mean, var), x_recon, z = vae(x)
+            loss = loss_function(x_recon, x, mean, var) + dual(U=u, Y_hat=Y_hat, Y=z, eps=args.eps)
+            loss.backward()
+            optimizer.step()
+            for p in positive_params:
+            	p.data.copy_(torch.relu(p.data))
+            running_loss += loss.item()
 
-        if epoch % (args.epoch // 50) == 0:
-            print('%.5f' %
-            (running_loss))
+        print('Epoch %d : %.5f' %
+            (epoch, running_loss/(idx+1)))
 
-    test(net, args, name='imgs/trained.png', loader=loader, Y=ds)
+    test(net, args, name='imgs/trained.png', loader=loader, vae=vae)
     '''
     Y = eg.sample(5000).cuda()
     plotaxis(Y, name='imgs/theor')
@@ -234,7 +322,7 @@ def train(net, optimizer, loader, ds, args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # optimization related arguments
-    parser.add_argument('--batch_size', default=512, type=int,
+    parser.add_argument('--batch_size', default=128, type=int,
                         help='input batch size')
     parser.add_argument('--epoch', default=100, type=int,
                         help='epochs to train for')
@@ -247,13 +335,14 @@ if __name__ == "__main__":
     parser.add_argument('--iters', default=1000, type=int)
     parser.add_argument('--mean', default=0, type=int)
     parser.add_argument('--std', default=1, type=int)
-    parser.add_argument('--dims', default=2, type=int)
+    parser.add_argument('--dims', default=128, type=int)
     parser.add_argument('--m', default=10, type=int)
     parser.add_argument('--n', default=5000, type=int)
     parser.add_argument('--k', default=100, type=int)
     parser.add_argument('--genTheor', action='store_true')
     parser.add_argument('--gaussian_support', action='store_true')
     parser.add_argument('--eps', default=0, type=float)
+    parser.add_argument('--kl_scale', default=1., type=float)
     args = parser.parse_args()
 
     print("Input arguments:")
@@ -267,17 +356,28 @@ if __name__ == "__main__":
                                  num_layer=3)
 
     #net = icq(net_, gs=args.gaussian_support)
+    vae = VAE(image_size=32,
+            channel_num=3,
+            kernel_num=128,
+            z_size=args.dims)
 
     for p in list(net.parameters()):
         if hasattr(p, 'be_positive'):
             positive_params.append(p)
         p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
 
-    ds = Synthetic(args, n=args.n)
-    loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
-    optimizer = optimizer(net, args)
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+    trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+    loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=0)
+    optimizer = optimizer(net, vae, args)
     net.cuda()
-    train(net, optimizer, loader, torch.from_numpy(ds.y).float().cuda(), args)
+    vae.cuda()
+    train(net, optimizer, loader, vae, args)
     #mnist
     #train(net, optimizer, loader, ds.y[:args.n].float().cuda(), args)
 
