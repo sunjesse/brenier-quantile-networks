@@ -23,54 +23,6 @@ from torchvision import datasets, transforms, utils
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-class Synthetic(data.Dataset):
-    def __init__(self, args,  n=1000):
-        self.n = n
-        np.random.seed(0)
-        self.y = np.random.normal(loc=0, scale=1, size=(self.n, 1))
-        #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,2],[2,5]]), size=(self.n))
-
-        #torch.manual_seed(0)
-        #self.u = torch.rand(self.n, args.dims)
-        #self.y = np.random.multivariate_normal(mean=[0, 0], cov=np.array([[1,0],[0,1]]), size=(self.n))
-
-        #uniform
-        #self.y1 = torch.rand(size=(self.n, 1))*5 + 1
-        #self.y2 = torch.rand(size=(self.n, 1))*3 + 2
-        #self.y = torch.cat([self.y1, self.y2], dim=1)
-
-        #exp
-        #self.y1 = np.random.exponential(scale=10, size=(self.n, 1))
-        #self.y2 = np.random.exponential(scale=2, size=(self.n, 1))
-        #self.y = np.concatenate([self.y1, self.y2], axis=1)
-        
-        #gaussian checkerboard
-        #self.y = np.load('../data/synthetic/bary_ot_checkerboard_3.npy', allow_pickle=True).tolist()
-        #self.y = self.y['Y']
-       
-        #spiral
-        '''
-        self.y, _ = make_spiral(n_samples_per_class=self.n, n_classes=1,
-            n_rotations=2.5, gap_between_spiral=0.1, noise=0.2,
-                gap_between_start_point=0.1, equal_interval=True)
-        '''
-        #self.y = np.random.standard_t(df=2, size=(args.n, 2))
-
-        #mnist
-        '''
-        transform=transforms.Compose([transforms.ToTensor()])
-        self.y_ = datasets.MNIST('../data', train=True, download=True,transform=transform)
-        self.y = self.y_.data.flatten(-2, -1).float()/255.
-        '''
-
-    def __len__(self):
-        return len(self.y)#self.y
-
-    def __getitem__(self, i):
-        if torch.is_tensor(self.y):
-            return self.y[i].cuda()
-        return torch.from_numpy(self.y[i]).float().cuda()
-
 class VAE(nn.Module):
     def __init__(self, image_size, channel_num, kernel_num, z_size):
         # configurations
@@ -102,7 +54,7 @@ class VAE(nn.Module):
         self.decoder = nn.Sequential(
             self._deconv(kernel_num, kernel_num // 2),
             self._deconv(kernel_num // 2, kernel_num // 4),
-            self._deconv(kernel_num // 4, channel_num),
+            self._deconv(kernel_num // 4, channel_num, last=True),
             nn.Sigmoid()
         )
 
@@ -142,11 +94,15 @@ class VAE(nn.Module):
         )
         return eps.mul(std).add_(mean)
 
+    def reconstruction_loss(self, x_reconstructed, x):
+        return nn.BCELoss(size_average=False)(x_reconstructed, x) / x.size(0)
+
+    def kl_divergence_loss(self, mean, logvar):
+        return ((mean**2 + logvar.exp() - 1 - logvar) / 2).mean()
     # =====
     # Utils
     # =====
 
-    @property
     def sample(self, size):
         z = Variable(
             torch.randn(size, self.z_size).cuda() if self._is_on_cuda() else
@@ -157,7 +113,7 @@ class VAE(nn.Module):
             self.feature_size,
             self.feature_size,
         )
-        return self.decoder(z_projected).data
+        return self.decoder(z_projected)
 
     def _is_on_cuda(self):
         return next(self.parameters()).is_cuda
@@ -176,7 +132,10 @@ class VAE(nn.Module):
             nn.ReLU(),
         )
 
-    def _deconv(self, channel_num, kernel_num):
+    def _deconv(self, channel_num, kernel_num, last=False):
+        if last:
+            return nn.ConvTranspose2d(channel_num, kernel_num,
+                                    kernel_size=4, stride=2, padding=1)
         return nn.Sequential(
             nn.ConvTranspose2d(
                 channel_num, kernel_num,
@@ -192,9 +151,9 @@ class VAE(nn.Module):
             nn.ReLU(),
         ) if relu else nn.Linear(in_size, out_size)
 
-
 def loss_function(recon_x, x, mu, logvar):
-    BCE = F.binary_cross_entropy(recon_x, x, reduction='mean')
+
+    BCE = F.binary_cross_entropy(recon_x, x, reduction='sum')
 
     # see Appendix B from VAE paper:
     # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
@@ -238,7 +197,7 @@ def gaussian_mixture(means, stds, p, args):
 def optimizer(net, vae, args):
     assert args.optimizer.lower() in ["sgd", "adam"], "Invalid Optimizer"
 
-    params = list(net.parameters()) + list(vae.parameters())
+    params = list(vae.parameters()) #+ list(vae.parameters())
     if args.optimizer.lower() == "sgd":
 	       return optim.SGD(params, lr=args.lr, momentum=args.beta1, nesterov=args.nesterov)
     elif args.optimizer.lower() == "adam":
@@ -249,6 +208,7 @@ def unif(size, eps=1E-7):
 
 def test(net, args, name, loader, vae):
     net.eval()
+    vae.eval()
 
     '''
     for p in list(net.parameters()):
@@ -256,6 +216,7 @@ def test(net, args, name, loader, vae):
             print(p)
     '''
     #U = torch.rand(size=(args.n, args.dims), requires_grad=True).cuda()
+    '''
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
     U_ = unif(size=(64, args.dims))
     U = gauss.icdf(U_)
@@ -264,7 +225,10 @@ def test(net, args, name, loader, vae):
     Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
     Y_hat = vae.project(Y_hat).view(-1, vae.kernel_num, vae.feature_size, vae.feature_size)
     Y_hat = vae.decoder(Y_hat)
+    '''
     #print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
+    Y_hat = vae.sample(64)
+    print(Y_hat.max(), Y_hat.min(), Y_hat.mean())
     utils.save_image(utils.make_grid(Y_hat),
         './cifar.png')
     return
@@ -297,16 +261,17 @@ def train(net, optimizer, loader, vae, args):
         running_loss = 0.0
         for idx, (x, label) in enumerate(loader):
             x = x.cuda()
-            u = unif(size=(args.batch_size, args.dims))
-            u = gauss.icdf(u)
+            #u = unif(size=(args.batch_size, args.dims))
+            #u = gauss.icdf(u)
             optimizer.zero_grad()
-            Y_hat = net(u)
-            (mean, var), x_recon, z = vae(x)
-            loss = loss_function(x_recon, x, mean, var) + dual(U=u, Y_hat=Y_hat, Y=z, eps=args.eps)
+            #Y_hat = net(u)
+            (mean, logvar), x_recon, z = vae(x)
+            loss = vae.reconstruction_loss(x_recon, x) #+ dual(U=u, Y_hat=Y_hat, Y=z, eps=args.eps)
+            loss += vae.kl_divergence_loss(mean, logvar)
             loss.backward()
             optimizer.step()
-            for p in positive_params:
-            	p.data.copy_(torch.relu(p.data))
+            #for p in positive_params:
+            #	p.data.copy_(torch.relu(p.data))
             running_loss += loss.item()
 
         print('Epoch %d : %.5f' %
@@ -361,16 +326,15 @@ if __name__ == "__main__":
             kernel_num=128,
             z_size=args.dims)
 
-    for p in list(net.parameters()):
-        if hasattr(p, 'be_positive'):
-            positive_params.append(p)
-        p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
+    #for p in list(net.parameters()):
+    #    if hasattr(p, 'be_positive'):
+    #        positive_params.append(p)
+    #    p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
 
     transform_train = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
     trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
     loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=0)
