@@ -26,6 +26,55 @@ def dual(U, Y_hat, Y, X, eps=0):
     loss += eps*torch.mean(l)
     return loss
 
+def dual_unconditioned(U, Y_hat, Y, eps=0):
+    loss = torch.mean(Y_hat)
+    Y = Y.permute(1, 0)
+    psi = torch.mm(U, Y) - Y_hat
+    sup, _ = torch.max(psi, dim=0)
+    loss += torch.mean(sup)
+
+    if eps == 0:
+        return loss
+
+    l = torch.exp((psi-sup)/eps)
+    loss += eps*torch.mean(l)
+    return loss
+
+def reparameterize(mu, logvar):
+    std = torch.exp(0.5 * logvar)
+    eps = torch.randn_like(std)
+    return eps.mul(std).add_(mu)
+
+class MLPVAE(nn.Module):
+    def __init__(self):
+        super(MLPVAE, self).__init__()
+
+        self.fc1 = nn.Linear(784, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc31 = nn.Linear(256, 2)
+        self.fc32 = nn.Linear(256, 2)
+        self.fc4 = nn.Linear(2, 256)
+        self.fc5 = nn.Linear(256, 512)
+        self.fc6 = nn.Linear(512, 784)
+
+    def encode(self, x):
+        h = F.relu(self.fc1(x))
+        h = F.relu(self.fc2(h))
+        return self.fc31(h), self.fc32(h)
+
+    def reparameterize(self, mu, logvar):
+        return reparameterize(mu, logvar) if self.training else mu
+
+    def decode(self, z):
+        h = F.relu(self.fc4(z))
+        h = F.relu(self.fc5(h))
+        return torch.sigmoid(self.fc6(h))
+
+    def forward(self, x):
+        mu, logvar = self.encode(x.view(-1, 784))
+        z = self.reparameterize(mu, logvar)
+        return self.decode(z), mu, logvar, z
+
 class VAE(nn.Module):
     def __init__(self, image_size, channel_num, kernel_num, z_size):
         # configurations
@@ -158,18 +207,18 @@ class ConditionalConvexQuantile(nn.Module):
     def __init__(self, xdim, args):
         super(ConditionalConvexQuantile, self).__init__()
         self.xdim = xdim
-        self.alpha = ICNN_LastInp_Quadratic(input_dim=784,#args.dims,
-                                 hidden_dim=512,#1024,#512
+        self.alpha = ICNN_LastInp_Quadratic(input_dim=args.dims,
+                                 hidden_dim=64,#1024,#512
                                  activation='celu',
                                  num_layer=3)
-        self.beta = ICNN_LastInp_Quadratic(input_dim=784,
-                                 hidden_dim=512,
+        self.beta = ICNN_LastInp_Quadratic(input_dim=args.dims,
+                                 hidden_dim=64,
                                  activation='celu',
-                                 num_layer=1,
+                                 num_layer=3,
                                  out_dim=self.xdim)
         #self.fc_x = nn.Linear(self.xdim, self.xdim)
 
-    def forward(self, z, x):
+    def forward(self, z):
         # we want onehot for categorical and non-ordinal x.
         #x = self.to_onehot(x)
         alpha = self.alpha(z)

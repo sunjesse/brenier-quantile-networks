@@ -24,56 +24,6 @@ from models import *
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-class Synthetic(data.Dataset):
-    def __init__(self, args,  n=1000):
-        self.n = n
-        np.random.seed(0)
-        #self.y = np.random.normal(loc=0, scale=1, size=(self.n, 1))
-        #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,2],[2,5]]), size=(self.n))
-
-        #torch.manual_seed(0)
-        #self.u = torch.rand(self.n, args.dims)
-        #self.y = np.random.multivariate_normal(mean=[0, 0], cov=np.array([[1,0],[0,1]]), size=(self.n))
-
-        #uniform
-        #self.y1 = torch.rand(size=(self.n, 1))*5 + 1
-        #self.y2 = torch.rand(size=(self.n, 1))*3 + 2
-        #self.y = torch.cat([self.y1, self.y2], dim=1)
-
-        #exp
-        #self.y1 = np.random.exponential(scale=10, size=(self.n, 1))
-        #self.y2 = np.random.exponential(scale=2, size=(self.n, 1))
-        #self.y = np.concatenate([self.y1, self.y2], axis=1)
-        
-        #gaussian checkerboard
-        #self.y = np.load('../data/synthetic/bary_ot_checkerboard_3.npy', allow_pickle=True).tolist()
-        #self.y = self.y['Y']
-       
-        #spiral
-        '''
-        self.y, _ = make_spiral(n_samples_per_class=self.n, n_classes=1,
-            n_rotations=2.5, gap_between_spiral=0.1, noise=0.2,
-                gap_between_start_point=0.1, equal_interval=True)
-        '''
-        #self.y = np.random.standard_t(df=2, size=(args.n, 2))
-
-        #mnist
-        transform=transforms.Compose([transforms.ToTensor(), transforms.Pad(2)])
-        self.y_ = datasets.MNIST('../data', train=True, download=True,transform=transform)
-        self.y = self.y_.data/255.#.flatten(-2, -1).float()/255.
-        self.x = self.y_.targets
-
-    def __len__(self):
-        return len(self.y)#self.y
-
-    def __getitem__(self, i):
-        if torch.is_tensor(self.y):
-            return self.y[i].float().to(device).unsqueeze(0), self.x[i].to(device)
-        y = torch.from_numpy(self.y[i]).float().to(device)
-        x = torch.from_numpy(self.x[i]).to(device)
-        return y.unsqueeze(0), x
-
-
 def loss_function(recon_x, x, mu, logvar):
 
     BCE = F.binary_cross_entropy(recon_x, x, reduction='sum')
@@ -132,43 +82,22 @@ def unif(size, eps=1E-7):
 def test(net, args, name, loader, vae):
     net.eval()
     vae.eval()
-    '''
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
-    U_ = unif(size=(100, 784))
-    U = gauss.icdf(U_)
+    U = unif(size=(100, args.dims))
+    U = gauss.icdf(U)
     a = torch.arange(0, 10, device=device)
     X = a*torch.ones((10, 10), device=device).long()
     X = X.permute(1, 0).flatten()
-    print(X)
     Y_hat = net.grad(U, X)#= net.forward(U, grad=True).sum()
-    #Y_hat = net.grad(U)
+    #f = net(U).sum()
+    #Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
     print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
-    '''
-    Y_hat = vae.sample(100)
-    print(Y_hat.max(), Y_hat.min(), Y_hat.mean())
-    Y_hat = Y_hat.view(100, 32, 32).unsqueeze(1)
+    #z = torch.randn(100, 2, device=device)
+    Y_hat = vae.decode(Y_hat)
+    Y_hat = Y_hat.view(100, 28, 28).unsqueeze(1)
     utils.save_image(utils.make_grid(Y_hat, nrow=10),
         './mnist.png')
     return
-    if args.dims == 1:
-        histogram(Y_hat, name) # uncomment for 1d case
-    else:
-        plot2d(Y_hat, name='imgs/2d.png') # 2d contour plot
-        plotaxis(Y_hat, name='imgs/train')
-
-def dual(U, Y_hat, Y, eps=0):
-    loss = torch.mean(Y_hat)
-    Y = Y.permute(1, 0)
-    psi = torch.mm(U, Y) - Y_hat
-    sup, _ = torch.max(psi, dim=0)
-    loss += torch.mean(sup)
-
-    if eps == 0:
-        return loss
-
-    l = torch.exp((psi-sup)/eps)
-    loss += eps*torch.mean(l)
-    return loss
 
 positive_params = []
 
@@ -179,21 +108,24 @@ def train(net, optimizer, loader, vae, args):
         running_loss = 0.0
         for idx, (Y, label) in enumerate(loader):
             Y = Y.cuda()
-            #u = unif(size=(args.batch_size, args.dims))
-            #u = gauss.icdf(u)
+            label = label.cuda()
+            u = unif(size=(args.batch_size, args.dims))
+            u = gauss.icdf(u)
             optimizer.zero_grad()
-            #Y_hat = net(u)
-            (mean, logvar), Y_recon, z = vae(Y)
-            loss = vae.reconstruction_loss(Y_recon, Y) #+ dual(U=u, Y_hat=Y_hat, Y=z, eps=args.eps)
-            loss += vae.kl_divergence_loss(mean, logvar)
+            alpha, beta = net(u)
+            X = net.to_onehot(label)
+            Y_recon, mu, logvar, z = vae(Y)
+            loss = loss_function(Y_recon, Y, mu, logvar)#vae.reconstruction_loss(Y_recon, Y)
+            loss += dual(U=u, Y_hat=(alpha, beta), Y=mu.detach(), X=X, eps=args.eps)
+            #loss = dual_unconditioned(U=u, Y_hat=Y_hat, Y=mu.detach(), eps=args.eps)
             loss.backward()
             optimizer.step()
-            #for p in positive_params:
-            #	p.data.copy_(torch.relu(p.data))
+            for p in positive_params:
+            	p.data.copy_(torch.relu(p.data))
             running_loss += loss.item()
 
         print('Epoch %d : %.5f' %
-            (epoch, running_loss/(idx+1)))
+            (epoch, running_loss/len(loader.dataset)))
 
     test(net, args, name='imgs/trained.png', loader=loader, vae=vae)
     '''
@@ -207,7 +139,7 @@ if __name__ == "__main__":
     # optimization related arguments
     parser.add_argument('--batch_size', default=128, type=int,
                         help='input batch size')
-    parser.add_argument('--epoch', default=100, type=int,
+    parser.add_argument('--epoch', default=25, type=int,
                         help='epochs to train for')
     parser.add_argument('--optimizer', default='adam', help='optimizer')
     parser.add_argument('--lr', default=0.005, type=float, help='LR')
@@ -218,7 +150,7 @@ if __name__ == "__main__":
     parser.add_argument('--iters', default=1000, type=int)
     parser.add_argument('--mean', default=0, type=int)
     parser.add_argument('--std', default=1, type=int)
-    parser.add_argument('--dims', default=128, type=int)
+    parser.add_argument('--dims', default=2, type=int)
     parser.add_argument('--m', default=10, type=int)
     parser.add_argument('--n', default=5000, type=int)
     parser.add_argument('--k', default=100, type=int)
@@ -233,23 +165,27 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     torch.cuda.set_device('cuda:0')
+    net = ConditionalConvexQuantile(xdim=10, args=args)
+    '''
     net = ICNN_LastInp_Quadratic(input_dim=args.dims,
-                                 hidden_dim=512,#1024,#512
-                                 activation='celu',
-                                 num_layer=3)
-
-    #net = icq(net_, gs=args.gaussian_support)
+                        hidden_dim=512,
+                        activation='celu',
+                        num_layer=3)
+    '''
+    '''
     vae = VAE(image_size=32,
             channel_num=1,
             kernel_num=128,
             z_size=args.dims)
+    '''
+    vae = MLPVAE()
 
-    #for p in list(net.parameters()):
-    #    if hasattr(p, 'be_positive'):
-    #        positive_params.append(p)
-    #    p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
+    for p in list(net.parameters()):
+        if hasattr(p, 'be_positive'):
+            positive_params.append(p)
+        p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
 
-    transform=transforms.Compose([transforms.Pad(2), transforms.ToTensor()])
+    transform=transforms.Compose([transforms.ToTensor()])
     ds = datasets.MNIST('../data', train=True, download=True,transform=transform)
     loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
     optimizer = optimizer(net, vae, args)

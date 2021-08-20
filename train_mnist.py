@@ -187,7 +187,7 @@ def train(net, optimizer, loader, args):
             u = unif(size=(args.batch_size, 784))#args.dims))
             u = gauss.icdf(u)
             optimizer.zero_grad()
-            alpha, beta = net(u, label)
+            alpha, beta = net(u)
             X = net.to_onehot(label)
             #X = net.fc_x(X)
             loss = dual(U=u, Y_hat=(alpha, beta), Y=Y, X=X, eps=args.eps)
