@@ -5,6 +5,27 @@ from ot_modules.icnn import *
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+def dual(U, Y_hat, Y, X, eps=0):
+    alpha, beta = Y_hat # alpha(U) + beta(U)^{T}X
+    loss = torch.mean(alpha)
+    Y = Y.permute(1, 0)
+    X = X.permute(1, 0)
+    BX = torch.mm(beta, X)
+    UY = torch.mm(U, Y)
+    # (U, Y), (U, X), beta.shape(bs, nclass), X.shape(bs, nclass)
+    #print(BX.shape, UY.shape, alpha.shape)
+    psi = UY - alpha - BX
+    sup, _ = torch.max(psi, dim=0)
+    #print(sup.shape)
+    loss += torch.mean(sup)
+
+    if eps == 0:
+        return loss
+
+    l = torch.exp((psi-sup)/eps)
+    loss += eps*torch.mean(l)
+    return loss
+
 class VAE(nn.Module):
     def __init__(self, image_size, channel_num, kernel_num, z_size):
         # configurations
