@@ -46,14 +46,14 @@ def reparameterize(mu, logvar):
     return eps.mul(std).add_(mu)
 
 class MLPVAE(nn.Module):
-    def __init__(self):
+    def __init__(self, args):
         super(MLPVAE, self).__init__()
 
         self.fc1 = nn.Linear(784, 512)
         self.fc2 = nn.Linear(512, 256)
-        self.fc31 = nn.Linear(256, 2)
-        self.fc32 = nn.Linear(256, 2)
-        self.fc4 = nn.Linear(2, 256)
+        self.fc31 = nn.Linear(256, args.dims)
+        self.fc32 = nn.Linear(256, args.dims)
+        self.fc4 = nn.Linear(args.dims, 256)
         self.fc5 = nn.Linear(256, 512)
         self.fc6 = nn.Linear(512, 784)
 
@@ -204,17 +204,21 @@ class VAE(nn.Module):
 
 
 class ConditionalConvexQuantile(nn.Module):
-    def __init__(self, xdim, args):
+    def __init__(self, xdim, args, a_hid=512, a_layers=3, b_hid=512, b_layers=1):
         super(ConditionalConvexQuantile, self).__init__()
         self.xdim = xdim
+        self.a_hid=a_hid
+        self.a_layers=a_layers
+        self.b_hid=b_hid
+        self.b_layers=b_layers
         self.alpha = ICNN_LastInp_Quadratic(input_dim=args.dims,
-                                 hidden_dim=64,#1024,#512
+                                 hidden_dim=self.a_hid,#1024,#512
                                  activation='celu',
-                                 num_layer=3)
+                                 num_layer=self.a_layers)
         self.beta = ICNN_LastInp_Quadratic(input_dim=args.dims,
-                                 hidden_dim=64,
+                                 hidden_dim=self.b_hid,
                                  activation='celu',
-                                 num_layer=3,
+                                 num_layer=self.b_layers,
                                  out_dim=self.xdim)
         #self.fc_x = nn.Linear(self.xdim, self.xdim)
 

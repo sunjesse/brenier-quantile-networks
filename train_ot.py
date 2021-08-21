@@ -19,6 +19,7 @@ from utils import truncated_normal
 from ot_modules.icnn import *
 from gen_data import *
 from torchvision import datasets, transforms, utils
+from models import *
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -184,20 +185,6 @@ def test(net, args, name, loader, Y):
 
 positive_params = []
 
-def dual(U, Y_hat, Y, eps=0):
-    loss = torch.mean(Y_hat)
-    Y = Y.permute(1, 0)
-    psi = torch.mm(U, Y) - Y_hat
-    sup, _ = torch.max(psi, dim=0)
-    loss += torch.mean(sup)
-
-    if eps == 0:
-        return loss
-
-    l = torch.exp((psi-sup)/eps)
-    loss += eps*torch.mean(l)
-    return loss
-
 def train(net, optimizer, loader, ds, args):
     k = args.k
     print(ds.shape)
@@ -209,11 +196,18 @@ def train(net, optimizer, loader, ds, args):
         #for idx, Y in enumerate(loader):
         #u = torch.rand(size=(args.batch_size, args.dims)).cuda()
         #Y = eg.sample(5000).cuda()
-        u = unif(size=(args.batch_size, args.dims))#torch.rand(size=(args.n, args.dims)).cuda()
+        u = unif(size=(args.n, 1))#torch.rand(size=(args.batch_size, args.dims)).cuda()
         u = gauss.icdf(u)
         optimizer.zero_grad()
-        Y_hat = net(u)
-        loss = dual(U=u, Y_hat=Y_hat, Y=ds, eps=args.eps)
+        #Y_hat = net(u)
+        '''
+        alpha, beta = net(u)
+        label = torch.zeros((args.n)).long().random_(0, 10)
+        label=label.cuda()
+        X = net.to_onehot(label).cuda()
+        '''
+        #loss = dual(U=u, Y_hat=(alpha, beta), Y=ds, X=X, eps=args.eps)
+        loss = dual_unconditioned(U=u, Y_hat=Y_hat, Y=ds, eps=args.eps)
         loss.backward()
         optimizer.step()
         for p in positive_params:
@@ -261,13 +255,18 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     torch.cuda.set_device('cuda:0')
+    '''
+    net = ConditionalConvexQuantile(xdim=10,
+                                    args=args,
+                                    a_hid=128,
+                                    a_layers=2,
+                                    b_hid=128,
+                                    b_layers=1)
+    '''
     net = ICNN_LastInp_Quadratic(input_dim=args.dims,
                                  hidden_dim=512,#1024,#512
                                  activation='celu',
                                  num_layer=3)
-
-    #net = icq(net_, gs=args.gaussian_support)
-
     for p in list(net.parameters()):
         if hasattr(p, 'be_positive'):
             positive_params.append(p)

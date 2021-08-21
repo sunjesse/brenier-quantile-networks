@@ -70,7 +70,7 @@ def gaussian_mixture(means, stds, p, args):
 def optimizer(net, vae, args):
     assert args.optimizer.lower() in ["sgd", "adam"], "Invalid Optimizer"
 
-    params = list(vae.parameters()) #+ list(vae.parameters())
+    params = list(vae.parameters()) + list(net.parameters())
     if args.optimizer.lower() == "sgd":
 	       return optim.SGD(params, lr=args.lr, momentum=args.beta1, nesterov=args.nesterov)
     elif args.optimizer.lower() == "adam":
@@ -85,6 +85,7 @@ def test(net, args, name, loader, vae):
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
     U = unif(size=(100, args.dims))
     U = gauss.icdf(U)
+    #U.requires_grad = True
     a = torch.arange(0, 10, device=device)
     X = a*torch.ones((10, 10), device=device).long()
     X = X.permute(1, 0).flatten()
@@ -106,6 +107,7 @@ def train(net, optimizer, loader, vae, args):
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
+        dual_loss = 0.0
         for idx, (Y, label) in enumerate(loader):
             Y = Y.cuda()
             label = label.cuda()
@@ -113,19 +115,28 @@ def train(net, optimizer, loader, vae, args):
             u = gauss.icdf(u)
             optimizer.zero_grad()
             alpha, beta = net(u)
+            #Y_hat = net(u)
             X = net.to_onehot(label)
             Y_recon, mu, logvar, z = vae(Y)
+            #if epoch <= args.epoch // 2:
             loss = loss_function(Y_recon, Y, mu, logvar)#vae.reconstruction_loss(Y_recon, Y)
-            loss += dual(U=u, Y_hat=(alpha, beta), Y=mu.detach(), X=X, eps=args.eps)
-            #loss = dual_unconditioned(U=u, Y_hat=Y_hat, Y=mu.detach(), eps=args.eps)
+            l1 = loss.item()
+            #else:
+            q_loss = dual(U=u, Y_hat=(alpha, beta), Y=mu.detach(), X=X, eps=args.eps)
+            if q_loss.item() > 0:
+                loss += q_loss#dual(U=u, Y_hat=(alpha, beta), Y=z.detach(), X=X, eps=args.eps)
+            l2 = loss.item()
+            dual_loss += l2 - l1
+
+            #loss += dual_unconditioned(U=u, Y_hat=Y_hat, Y=mu.detach(), eps=args.eps)
             loss.backward()
             optimizer.step()
             for p in positive_params:
             	p.data.copy_(torch.relu(p.data))
             running_loss += loss.item()
 
-        print('Epoch %d : %.5f' %
-            (epoch, running_loss/len(loader.dataset)))
+        print('Epoch %d : %.5f %.5f' %
+            (epoch, running_loss/len(loader.dataset), dual_loss/len(loader.dataset)))
 
     test(net, args, name='imgs/trained.png', loader=loader, vae=vae)
     '''
@@ -150,7 +161,7 @@ if __name__ == "__main__":
     parser.add_argument('--iters', default=1000, type=int)
     parser.add_argument('--mean', default=0, type=int)
     parser.add_argument('--std', default=1, type=int)
-    parser.add_argument('--dims', default=2, type=int)
+    parser.add_argument('--dims', default=3, type=int)
     parser.add_argument('--m', default=10, type=int)
     parser.add_argument('--n', default=5000, type=int)
     parser.add_argument('--k', default=100, type=int)
@@ -165,7 +176,12 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     torch.cuda.set_device('cuda:0')
-    net = ConditionalConvexQuantile(xdim=10, args=args)
+    net = ConditionalConvexQuantile(xdim=10, 
+                                    args=args,
+                                    a_hid=128, 
+                                    a_layers=2,
+                                    b_hid=128,
+                                    b_layers=1)
     '''
     net = ICNN_LastInp_Quadratic(input_dim=args.dims,
                         hidden_dim=512,
@@ -178,7 +194,7 @@ if __name__ == "__main__":
             kernel_num=128,
             z_size=args.dims)
     '''
-    vae = MLPVAE()
+    vae = MLPVAE(args=args)
 
     for p in list(net.parameters()):
         if hasattr(p, 'be_positive'):
