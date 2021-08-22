@@ -26,7 +26,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def loss_function(recon_x, x, mu, logvar):
 
-    BCE = F.binary_cross_entropy(recon_x, x, reduction='sum')
+    BCE = F.mse_loss(recon_x, x, reduction='sum')
 
     # see Appendix B from VAE paper:
     # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
@@ -82,85 +82,62 @@ def unif(size, eps=1E-7):
 def test(net, args, name, loader, vae):
     net.eval()
     vae.eval()
-
-    '''
-    for p in list(net.parameters()):
-        if hasattr(p, 'be_positive'):
-            print(p)
-    '''
-    #U = torch.rand(size=(args.n, args.dims), requires_grad=True).cuda()
-    '''
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
-    U_ = unif(size=(64, args.dims))
+    U_ = unif(size=(100, args.dims))
     U = gauss.icdf(U_)
-    U.requires_grad = True
-    f = net.forward(U, grad=True).sum()
-    Y_hat = torch.autograd.grad(f, U, create_graph=True)[0]
-    Y_hat = vae.project(Y_hat).view(-1, vae.kernel_num, vae.feature_size, vae.feature_size)
-    Y_hat = vae.decoder(Y_hat)
-    '''
+    #U.requires_grad = True
+    a = torch.arange(0, 10, device=device)
+    X = a*torch.ones((10, 10), device=device).long()
+    X = X.permute(1, 0).flatten()
+    #Y_hat = net.grad(U, X)
     #print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
-    Y_hat = vae.sample(64)
-    print(Y_hat.max(), Y_hat.min(), Y_hat.mean())
-    utils.save_image(utils.make_grid(Y_hat),
+    z = torch.randn(100, args.dims, device=device)
+    Y_hat = vae.decode(z)
+    print(Y_hat.shape, Y_hat.min(), Y_hat.max())
+    utils.save_image(utils.make_grid(Y_hat, nrow=10),
         './cifar.png')
     return
-    if args.dims == 1:
-        histogram(Y_hat, name) # uncomment for 1d case
-    else:
-        plot2d(Y_hat, name='imgs/2d.png') # 2d contour plot
-        plotaxis(Y_hat, name='imgs/train')
 
 positive_params = []
-
-def dual(U, Y_hat, Y, eps=0):
-    loss = torch.mean(Y_hat)
-    Y = Y.permute(1, 0)
-    psi = torch.mm(U, Y) - Y_hat
-    sup, _ = torch.max(psi, dim=0)
-    loss += torch.mean(sup)
-
-    if eps == 0:
-        return loss
-
-    l = torch.exp((psi-sup)/eps)
-    loss += eps*torch.mean(l)
-    return loss
 
 def train(net, optimizer, loader, vae, args):
     k = args.k
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
-        for idx, (x, label) in enumerate(loader):
-            x = x.cuda()
-            #u = unif(size=(args.batch_size, args.dims))
-            #u = gauss.icdf(u)
+        dual_loss = 0.0
+        for idx, (Y, label) in enumerate(loader):
+            Y = Y.cuda()
+            label = label.cuda()
+            u = unif(size=(args.batch_size, args.dims))
+            u = gauss.icdf(u)
             optimizer.zero_grad()
-            #Y_hat = net(u)
-            (mean, logvar), x_recon, z = vae(x)
-            loss = vae.reconstruction_loss(x_recon, x) #+ dual(U=u, Y_hat=Y_hat, Y=z, eps=args.eps)
-            loss += vae.kl_divergence_loss(mean, logvar)
+            #alpha, beta = net(u)
+            #X = net.to_onehot(label)
+            Y_recon, mu, logvar = vae(Y)
+            loss = loss_function(Y_recon, Y, mu, logvar) #+ dual(U=u, Y_hat=Y_hat, Y=z, eps=args.eps)
+            #l1 = loss.item()
+            #q_loss = dual(U=u, Y_hat=(alpha, beta), Y=mu.detach(), X=X, eps=args.eps)
+            #if q_loss.item() > 0:
+            #    loss += q_loss
+            #l2 = loss.item()
+            #dual_loss += l2 - l1
+
             loss.backward()
             optimizer.step()
-            #for p in positive_params:
-            #	p.data.copy_(torch.relu(p.data))
+            for p in positive_params:
+            	p.data.copy_(torch.relu(p.data))
             running_loss += loss.item()
 
-        print('Epoch %d : %.5f' %
-            (epoch, running_loss/(idx+1)))
+        print('Epoch %d : %.5f %.5f' %
+            (epoch, running_loss/len(loader.dataset), dual_loss/len(loader.dataset)))
 
     test(net, args, name='imgs/trained.png', loader=loader, vae=vae)
-    '''
-    Y = eg.sample(5000).cuda()
-    plotaxis(Y, name='imgs/theor')
-    plot2d(Y, name='imgs/theor.png')
-    '''
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # optimization related arguments
-    parser.add_argument('--batch_size', default=128, type=int,
+    parser.add_argument('--batch_size', default=512, type=int,
                         help='input batch size')
     parser.add_argument('--epoch', default=100, type=int,
                         help='epochs to train for')
@@ -188,21 +165,25 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     torch.cuda.set_device('cuda:0')
+    net = ConditionalConvexQuantile(xdim=10,
+                                    args=args,
+                                    a_hid=128,
+                                    a_layers=2,
+                                    b_hid=128,
+                                    b_layers=1)
+    '''
     net = ICNN_LastInp_Quadratic(input_dim=args.dims,
                                  hidden_dim=512,#1024,#512
                                  activation='celu',
                                  num_layer=3)
+    '''
+    vae = VAE(in_channels=3,
+              latent_dim=args.dims)
 
-    #net = icq(net_, gs=args.gaussian_support)
-    vae = VAE(image_size=32,
-            channel_num=3,
-            kernel_num=128,
-            z_size=args.dims)
-
-    #for p in list(net.parameters()):
-    #    if hasattr(p, 'be_positive'):
-    #        positive_params.append(p)
-    #    p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
+    for p in list(net.parameters()):
+        if hasattr(p, 'be_positive'):
+            positive_params.append(p)
+        p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
 
     transform_train = transforms.Compose([
         transforms.RandomCrop(32, padding=4),

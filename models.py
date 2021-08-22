@@ -45,6 +45,7 @@ def reparameterize(mu, logvar):
     eps = torch.randn_like(std)
     return eps.mul(std).add_(mu)
 
+
 class MLPVAE(nn.Module):
     def __init__(self, args):
         super(MLPVAE, self).__init__()
@@ -76,132 +77,117 @@ class MLPVAE(nn.Module):
         return self.decode(z), mu, logvar, z
 
 class VAE(nn.Module):
-    def __init__(self, image_size, channel_num, kernel_num, z_size):
-        # configurations
-        super().__init__()
-        self.image_size = image_size
-        self.channel_num = channel_num
-        self.kernel_num = kernel_num
-        self.z_size = z_size
+    def __init__(self,
+                 in_channels,
+                 latent_dim,
+                 hidden_dims = None,
+                 **kwargs):
+        super(VAE, self).__init__()
 
-        # encoder
-        self.encoder = nn.Sequential(
-            self._conv(channel_num, kernel_num // 4),
-            self._conv(kernel_num // 4, kernel_num // 2),
-            self._conv(kernel_num // 2, kernel_num),
-        )
+        self.latent_dim = latent_dim
 
-        # encoded feature's size and volume
-        self.feature_size = image_size // 8
-        self.feature_volume = kernel_num * (self.feature_size ** 2)
+        modules = []
+        if hidden_dims is None:
+            hidden_dims = [32, 64, 128, 256]
 
-        # q
-        self.q_mean = self._linear(self.feature_volume, z_size, relu=False)
-        self.q_logvar = self._linear(self.feature_volume, z_size, relu=False)
+        # Build Encoder
+        for h_dim in hidden_dims:
+            modules.append(
+                nn.Sequential(
+                    nn.Conv2d(in_channels, out_channels=h_dim,
+                              kernel_size= 3, stride= 2, padding  = 1),
+                    nn.BatchNorm2d(h_dim),
+                    nn.LeakyReLU())
+            )
+            in_channels = h_dim
 
-        # projection
-        self.project = self._linear(z_size, self.feature_volume, relu=False)
+        self.encoder = nn.Sequential(*modules)
+        self.fc_mu = nn.Linear(hidden_dims[-1]*4, latent_dim)
+        self.fc_var = nn.Linear(hidden_dims[-1]*4, latent_dim)
 
-        # decoder
-        self.decoder = nn.Sequential(
-            self._deconv(kernel_num, kernel_num // 2),
-            self._deconv(kernel_num // 2, kernel_num // 4),
-            self._deconv(kernel_num // 4, channel_num, last=True),
-            nn.Sigmoid()
-        )
 
-    def forward(self, x):
-        # encode x
-        encoded = self.encoder(x)
+        # Build Decoder
+        modules = []
 
-        # sample latent code z from q given x.
-        mean, logvar = self.q(encoded)
-        z = self.z(mean, logvar)
-        z_projected = self.project(z).view(
-            -1, self.kernel_num,
-            self.feature_size,
-            self.feature_size,
-        )
+        self.decoder_input = nn.Linear(latent_dim, hidden_dims[-1] * 4)
 
-        # reconstruct x from z
-        x_reconstructed = self.decoder(z_projected)
-        # return the parameters of distribution of q given x and the
-        # reconstructed image.
-        return (mean, logvar), x_reconstructed, z
+        hidden_dims.reverse()
 
-    # ==============
-    # VAE components
-    # ==============
+        for i in range(len(hidden_dims) - 1):
+            modules.append(
+                nn.Sequential(
+                    nn.ConvTranspose2d(hidden_dims[i],
+                                       hidden_dims[i + 1],
+                                       kernel_size=3,
+                                       stride = 2,
+                                       padding=1,
+                                       output_padding=1),
+                    nn.BatchNorm2d(hidden_dims[i + 1]),
+                    nn.LeakyReLU())
+            )
 
-    def q(self, encoded):
-        unrolled = encoded.view(-1, self.feature_volume)
-        return self.q_mean(unrolled), self.q_logvar(unrolled)
 
-    def z(self, mean, logvar):
-        std = logvar.mul(0.5).exp_()
-        eps = (
-            Variable(torch.randn(std.size())).cuda() if self._is_on_cuda else
-            Variable(torch.randn(std.size()))
-        )
-        return eps.mul(std).add_(mean)
 
-    def reconstruction_loss(self, x_reconstructed, x):
-        return nn.BCELoss(size_average=False)(x_reconstructed, x) / x.size(0)
+        self.decoder = nn.Sequential(*modules)
 
-    def kl_divergence_loss(self, mean, logvar):
-        return ((mean**2 + logvar.exp() - 1 - logvar) / 2).mean()
-    # =====
-    # Utils
-    # =====
+        self.final_layer = nn.Sequential(
+                            nn.ConvTranspose2d(hidden_dims[-1],
+                                               hidden_dims[-1],
+                                               kernel_size=3,
+                                               stride=2,
+                                               padding=1,
+                                               output_padding=1),
+                            nn.BatchNorm2d(hidden_dims[-1]),
+                            nn.LeakyReLU(),
+                            nn.Conv2d(hidden_dims[-1], out_channels= 3,
+                                      kernel_size= 3, padding= 1),
+                            nn.Sigmoid())#Tanh())
 
-    def sample(self, size):
-        z = Variable(
-            torch.randn(size, self.z_size).cuda() if self._is_on_cuda() else
-            torch.randn(size, self.z_size)
-        )
-        z_projected = self.project(z).view(
-            -1, self.kernel_num,
-            self.feature_size,
-            self.feature_size,
-        )
-        return self.decoder(z_projected)
+    def encode(self, input):
+        """
+        Encodes the input by passing through the encoder network
+        and returns the latent codes.
+        :param input: (Tensor) Input tensor to encoder [N x C x H x W]
+        :return: (Tensor) List of latent codes
+        """
+       	result = self.encoder(input)
+        result = torch.flatten(result, start_dim=1)
+        # Split the result into mu and var components
+        # of the latent Gaussian distribution
+        mu = self.fc_mu(result)
+        log_var = self.fc_var(result)
 
-    def _is_on_cuda(self):
-        return next(self.parameters()).is_cuda
+        return [mu, log_var]
 
-    # ======
-    # Layers
-    # ======
+    def decode(self, z):
+        """
+        Maps the given latent codes
+        onto the image space.
+        :param z: (Tensor) [B x D]
+        :return: (Tensor) [B x C x H x W]
+        """
+        result = self.decoder_input(z)
+        result = result.view(-1, 256, 2, 2)
+        result = self.decoder(result)
+        result = self.final_layer(result)
+        return result
 
-    def _conv(self, channel_size, kernel_num):
-        return nn.Sequential(
-            nn.Conv2d(
-                channel_size, kernel_num,
-                kernel_size=4, stride=2, padding=1,
-            ),
-            nn.BatchNorm2d(kernel_num),
-            nn.ReLU(),
-        )
+    def reparameterize(self, mu, logvar):
+        """
+        Reparameterization trick to sample from N(mu, var) from
+        N(0,1).
+        :param mu: (Tensor) Mean of the latent Gaussian [B x D]
+        :param logvar: (Tensor) Standard deviation of the latent Gaussian [B x D]
+        :return: (Tensor) [B x D]
+        """
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return eps * std + mu
 
-    def _deconv(self, channel_num, kernel_num, last=False):
-        if last:
-            return nn.ConvTranspose2d(channel_num, kernel_num,
-                                    kernel_size=4, stride=2, padding=1)
-        return nn.Sequential(
-            nn.ConvTranspose2d(
-                channel_num, kernel_num,
-                kernel_size=4, stride=2, padding=1,
-            ),
-            nn.BatchNorm2d(kernel_num),
-            nn.ReLU(),
-        )
-
-    def _linear(self, in_size, out_size, relu=True):
-        return nn.Sequential(
-            nn.Linear(in_size, out_size),
-            nn.ReLU(),
-        ) if relu else nn.Linear(in_size, out_size)
-
+    def forward(self, input, **kwargs):
+        mu, log_var = self.encode(input)
+        z = self.reparameterize(mu, log_var)
+        return self.decode(z), mu, log_var
 
 class ConditionalConvexQuantile(nn.Module):
     def __init__(self, xdim, args, a_hid=512, a_layers=3, b_hid=512, b_layers=1):

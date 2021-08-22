@@ -139,11 +139,6 @@ def train(net, optimizer, loader, vae, args):
             (epoch, running_loss/len(loader.dataset), dual_loss/len(loader.dataset)))
 
     test(net, args, name='imgs/trained.png', loader=loader, vae=vae)
-    '''
-    Y = eg.sample(5000).cuda()
-    plotaxis(Y, name='imgs/theor')
-    plot2d(Y, name='imgs/theor.png')
-    '''
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
