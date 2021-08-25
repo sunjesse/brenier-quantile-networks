@@ -11,12 +11,15 @@ def dual(U, Y_hat, Y, X, eps=0):
     Y = Y.permute(1, 0)
     X = X.permute(1, 0)
     BX = torch.mm(beta, X)
+    #print(beta[0])
+    #print(BX.max())
     UY = torch.mm(U, Y)
     # (U, Y), (U, X), beta.shape(bs, nclass), X.shape(bs, nclass)
     #print(BX.shape, UY.shape, alpha.shape)
     psi = UY - alpha - BX
     sup, _ = torch.max(psi, dim=0)
     #print(sup.shape)
+    #print(UY.min(), UY.max(), sup.mean())
     loss += torch.mean(sup)
 
     if eps == 0:
@@ -90,6 +93,7 @@ class VAE(nn.Module):
         if hidden_dims is None:
             hidden_dims = [32, 64, 128, 256]
 
+        self.feat_last = hidden_dims[-1] 
         # Build Encoder
         for h_dim in hidden_dims:
             modules.append(
@@ -140,7 +144,7 @@ class VAE(nn.Module):
                             nn.BatchNorm2d(hidden_dims[-1]),
                             nn.LeakyReLU(),
                             nn.Conv2d(hidden_dims[-1], out_channels= 3,
-                                      kernel_size= 3, padding= 1),
+                                        kernel_size= 3, padding= 1),
                             nn.Sigmoid())#Tanh())
 
     def encode(self, input):
@@ -159,7 +163,7 @@ class VAE(nn.Module):
 
         return [mu, log_var]
 
-    def decode(self, z):
+    def decode(self, z, train=True):
         """
         Maps the given latent codes
         onto the image space.
@@ -167,7 +171,7 @@ class VAE(nn.Module):
         :return: (Tensor) [B x C x H x W]
         """
         result = self.decoder_input(z)
-        result = result.view(-1, 256, 2, 2)
+        result = result.view(-1, self.feat_last, 2, 2)
         result = self.decoder(result)
         result = self.final_layer(result)
         return result
@@ -197,6 +201,7 @@ class ConditionalConvexQuantile(nn.Module):
         self.a_layers=a_layers
         self.b_hid=b_hid
         self.b_layers=b_layers
+        '''
         self.alpha = ICNN_LastInp_Quadratic(input_dim=args.dims,
                                  hidden_dim=self.a_hid,#1024,#512
                                  activation='celu',
@@ -206,14 +211,37 @@ class ConditionalConvexQuantile(nn.Module):
                                  activation='celu',
                                  num_layer=self.b_layers,
                                  out_dim=self.xdim)
-        #self.fc_x = nn.Linear(self.xdim, self.xdim)
+        '''
+        alpha = []
+        beta = []
+        alpha.append(nn.Sequential(nn.Linear(args.dims, self.a_hid),
+                                   nn.ReLU(inplace=True)))
+        for i in range(self.a_layers):
+            alpha.append(nn.Sequential(nn.Linear(self.a_hid, self.a_hid),
+                                       nn.ReLU(inplace=True)))
+        alpha.append(nn.Sequential(nn.Linear(self.a_hid, 1)))
+        beta.append(nn.Sequential(nn.Linear(args.dims, self.b_hid),
+                                  nn.ReLU(inplace=True)))
+        for i in range(self.b_layers):
+            beta.append(nn.Sequential(nn.Linear(self.b_hid, self.b_hid),
+                                      nn.ReLU(inplace=True)))
+        beta.append(nn.Sequential(nn.Linear(self.b_hid, self.xdim)))
 
-    def forward(self, z):
+        self.alpha = nn.Sequential(*alpha)
+        self.beta = nn.Sequential(*beta)
+
+        '''
+        self.fc_x = nn.Sequential(nn.Linear(self.xdim, self.xdim),
+                                  nn.BatchNorm1d(self.xdim, affine=False))
+        '''
+
+    def forward(self, z, x=None):
         # we want onehot for categorical and non-ordinal x.
         #x = self.to_onehot(x)
+        #x_ = self.fc_x(x)
         alpha = self.alpha(z)
         beta = self.beta(z) #torch.bmm(self.beta(z).unsqueeze(1), self.fc_x(x).unsqueeze(-1))
-        return alpha, beta
+        return alpha, beta, #, self.fc_x(x)
     
     def grad(self, u, x):
         x = self.to_onehot(x)
@@ -231,5 +259,6 @@ class ConditionalConvexQuantile(nn.Module):
             onehot.scatter_(dim=-1, index=x.view(x.shape[0], 1), value=1)
             onehot -= 1/self.xdim
         #print(onehot)
+        #onehot.requires_grad = True
         return onehot
 
