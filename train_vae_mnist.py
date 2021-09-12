@@ -16,7 +16,7 @@ from scipy.stats import norm
 import matplotlib.pyplot as plt
 import seaborn as sns
 import utils
-from utils import truncated_normal
+from utils import load, save, truncated_normal
 from ot_modules.icnn import *
 from gen_data import *
 from torchvision import datasets, transforms, utils
@@ -123,8 +123,8 @@ def train(net, optimizer, loader, vae, args):
             l1 = loss.item()
             #else:
             q_loss = dual(U=u, Y_hat=(alpha, beta), Y=mu.detach(), X=X, eps=args.eps)
-            if q_loss.item() > 0:
-                loss += q_loss#dual(U=u, Y_hat=(alpha, beta), Y=z.detach(), X=X, eps=args.eps)
+            #if q_loss.item() > 0:
+            loss += q_loss#dual(U=u, Y_hat=(alpha, beta), Y=z.detach(), X=X, eps=args.eps)
             l2 = loss.item()
             dual_loss += l2 - l1
 
@@ -164,6 +164,9 @@ if __name__ == "__main__":
     parser.add_argument('--gaussian_support', action='store_true')
     parser.add_argument('--eps', default=0, type=float)
     parser.add_argument('--kl_scale', default=1., type=float)
+    parser.add_argument('--folder', type=str)
+    parser.add_argument('--save_model', action='store_true')
+    parser.add_argument('--weights', default='', type=str)
     args = parser.parse_args()
 
     print("Input arguments:")
@@ -176,13 +179,7 @@ if __name__ == "__main__":
                                     a_hid=128, 
                                     a_layers=2,
                                     b_hid=128,
-                                    b_layers=1)
-    '''
-    net = ICNN_LastInp_Quadratic(input_dim=args.dims,
-                        hidden_dim=512,
-                        activation='celu',
-                        num_layer=3)
-    '''
+                                    b_layers=2)
     '''
     vae = VAE(image_size=32,
             channel_num=1,
@@ -197,6 +194,10 @@ if __name__ == "__main__":
             positive_params.append(p)
         p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
     '''
+    if len(args.weights) > 0:
+        load(net, args.weights + '/net.pth')
+        load(vae, args.weights + '/vae.pth')
+
     transform=transforms.Compose([transforms.ToTensor()])
     ds = datasets.MNIST('../data', train=True, download=True,transform=transform)
     loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
@@ -204,8 +205,10 @@ if __name__ == "__main__":
     net.cuda()
     vae.cuda()
     train(net, optimizer, loader, vae, args)
-    #mnist
-    #train(net, optimizer, loader, ds.y[:args.n].float().cuda(), args)
+
+    if args.save_model:
+        save(net, args.folder, 'net')
+        save(vae, args.folder, 'vae')
 
     if args.genTheor:
         Y = torch.from_numpy(ds.y)

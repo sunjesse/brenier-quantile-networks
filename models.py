@@ -4,15 +4,15 @@ import torch.nn.functional as F
 from ot_modules.icnn import *
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+attributes = ['5_o_Clock_Shadow', 'Arched_Eyebrows', 'Attractive', 'Bags_Under_Eyes', 'Bald', 'Bangs', 'Big_Lips', 'Big_Nose', 'Black_Hair', 'Blond_Hair', 'Blurry', 'Brown_Hair', 'Bushy_Eyebrows', 'Chubby', 'Double_Chin', 'Eyeglasses', 'Goatee', 'Gray_Hair', 'Heavy_Makeup', 'High_Cheekbones', 'Male', 'Mouth_Slightly_Open', 'Mustache', 'Narrow_Eyes', 'No_Beard', 'Oval_Face', 'Pale_Skin', 'Pointy_Nose', 'Receding_Hairline', 'Rosy_Cheeks', 'Sideburns', 'Smiling', 'Straight_Hair', 'Wavy_Hair', 'Wearing_Earrings', 'Wearing_Hat', 'Wearing_Lipstick', 'Wearing_Necklace', 'Wearing_Necktie', 'Young']
+
 
 def dual(U, Y_hat, Y, X, eps=0):
     alpha, beta = Y_hat # alpha(U) + beta(U)^{T}X
-    loss = torch.mean(alpha)
     Y = Y.permute(1, 0)
     X = X.permute(1, 0)
     BX = torch.mm(beta, X)
-    #print(beta[0])
-    #print(BX.max())
+    loss = torch.mean(alpha) #+ BX)
     UY = torch.mm(U, Y)
     # (U, Y), (U, X), beta.shape(bs, nclass), X.shape(bs, nclass)
     #print(BX.shape, UY.shape, alpha.shape)
@@ -43,11 +43,42 @@ def dual_unconditioned(U, Y_hat, Y, eps=0):
     loss += eps*torch.mean(l)
     return loss
 
+def generate_x():
+    x = torch.zeros(40)
+    with open('./description.txt') as f:
+        for line in f:
+            i = attributes.index(line[:-1])
+            x[i] = 1
+    return x
+
 def reparameterize(mu, logvar):
     std = torch.exp(0.5 * logvar)
     eps = torch.randn_like(std)
     return eps.mul(std).add_(mu)
 
+class BiRNN(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers, xdim, bn_last=True):
+        super(BiRNN, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.bn_last = bn_last
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, bidirectional=True)
+        self.fc = nn.Linear(hidden_size*2, xdim)
+        self.norm = nn.BatchNorm1d(xdim, momentum=1.0, affine=False)
+    
+    def forward(self, x):
+        # Set initial states
+        h0 = torch.zeros(self.num_layers*2, x.size(0), self.hidden_size).to(device) # 2 for bidirection 
+        c0 = torch.zeros(self.num_layers*2, x.size(0), self.hidden_size).to(device)
+        
+        # Forward propagate LSTM
+        out, _ = self.lstm(x, (h0, c0))  # out: tensor of shape (batch_size, seq_length, hidden_size*2)
+        
+        # Decode the hidden state of the last time step
+        out = self.fc(out[:, -1, :])
+        if self.bn_last:
+            return self.norm(out)
+        return out
 
 class MLPVAE(nn.Module):
     def __init__(self, args):
@@ -202,8 +233,9 @@ class ConditionalConvexQuantile(nn.Module):
         self.b_hid=b_hid
         self.b_layers=b_layers
         '''
+
         self.alpha = ICNN_LastInp_Quadratic(input_dim=args.dims,
-                                 hidden_dim=self.a_hid,#1024,#512
+                                 hidden_dim=self.a_hid,
                                  activation='celu',
                                  num_layer=self.a_layers)
         self.beta = ICNN_LastInp_Quadratic(input_dim=args.dims,
@@ -215,25 +247,43 @@ class ConditionalConvexQuantile(nn.Module):
         alpha = []
         beta = []
         alpha.append(nn.Sequential(nn.Linear(args.dims, self.a_hid),
-                                   nn.ReLU(inplace=True)))
-        for i in range(self.a_layers):
+                                   nn.CELU(inplace=True)))
+
+        for i in range(2, self.a_layers+1):
             alpha.append(nn.Sequential(nn.Linear(self.a_hid, self.a_hid),
-                                       nn.ReLU(inplace=True)))
+                                       nn.CELU(inplace=True)))
+
         alpha.append(nn.Sequential(nn.Linear(self.a_hid, 1)))
         beta.append(nn.Sequential(nn.Linear(args.dims, self.b_hid),
-                                  nn.ReLU(inplace=True)))
-        for i in range(self.b_layers):
+                                  nn.CELU(inplace=True)))
+
+        for i in range(2, self.b_layers+1):
             beta.append(nn.Sequential(nn.Linear(self.b_hid, self.b_hid),
-                                      nn.ReLU(inplace=True)))
+                                      nn.CELU(inplace=True)))
+
         beta.append(nn.Sequential(nn.Linear(self.b_hid, self.xdim)))
 
         self.alpha = nn.Sequential(*alpha)
         self.beta = nn.Sequential(*beta)
 
+        #self.bn1 = nn.BatchNorm1d(self.xdim, momentum=1.0, affine=False)
+        
         '''
-        self.fc_x = nn.Sequential(nn.Linear(self.xdim, self.xdim),
-                                  nn.BatchNorm1d(self.xdim, affine=False))
+        # MLP
+        self.f = nn.Sequential(nn.BatchNorm1d(self.xdim),
+                               nn.Linear(self.xdim, 64),
+                               nn.BatchNorm1d(64),
+                               nn.ReLU(inplace=True),
+                               nn.Linear(64, 64),
+                               nn.BatchNorm1d(64),
+                               nn.ReLU(inplace=True),
+                               nn.Linear(64, self.xdim),
+                               nn.BatchNorm1d(self.xdim, momentum=1.0, affine=False))
         '''
+        self.f = BiRNN(input_size=args.dims,
+                       hidden_size=args.dims*4,
+                       num_layers=2,
+                       xdim=self.xdim)
 
     def forward(self, z, x=None):
         # we want onehot for categorical and non-ordinal x.
@@ -241,11 +291,34 @@ class ConditionalConvexQuantile(nn.Module):
         #x_ = self.fc_x(x)
         alpha = self.alpha(z)
         beta = self.beta(z) #torch.bmm(self.beta(z).unsqueeze(1), self.fc_x(x).unsqueeze(-1))
-        return alpha, beta, #, self.fc_x(x)
+        #quad = (z.view(z.size(0), -1) ** 2).sum(1, keepdim=True) / 2
+        return alpha, beta #, self.fc_x(x)
     
-    def grad(self, u, x):
-        x = self.to_onehot(x)
+    def grad(self, u, x=None, onehot=True):
+        if onehot:
+            x = self.to_onehot(x)
+        elif x != None:
+            x = self.f(x)#self.bn1(x)
+            #print(x.shape)
         u.requires_grad = True 
+        phi = self.alpha(u).sum() + (torch.bmm(self.beta(u).unsqueeze(1), x.unsqueeze(-1)).squeeze(-1)).sum()
+        d_phi = torch.autograd.grad(phi, u, create_graph=True)[0]
+        return d_phi
+
+    def grad_multi(self, u, x):
+        if x == None:
+            x = generate_x()
+        x_s = x.shape[-1]
+        print(u.shape)
+        print(x.shape, x)
+        for i in range(40):
+            if x[i] == 1:
+                print(attributes[i], end=',')
+        print()
+        x = x.expand(1, x_s)
+        x = x.repeat(u.shape[0], 1).float().cuda()
+        x = self.bn1(x)
+        u.requires_grad = True
         phi = self.alpha(u).sum() + (torch.bmm(self.beta(u).unsqueeze(1), x.unsqueeze(-1)).squeeze(-1)).sum()
         d_phi = torch.autograd.grad(phi, u, create_graph=True)[0]
         return d_phi
@@ -257,8 +330,17 @@ class ConditionalConvexQuantile(nn.Module):
         with torch.no_grad():
             onehot = torch.zeros((x.shape[0], self.xdim), device=device)
             onehot.scatter_(dim=-1, index=x.view(x.shape[0], 1), value=1)
-            onehot -= 1/self.xdim
-        #print(onehot)
-        #onehot.requires_grad = True
+            #onehot -= 1/self.xdim
+            #onehot = self.bn1(onehot)
+        onehot = self.f(onehot)
         return onehot
 
+    def weights_init_uniform_rule(self, m):
+        classname = m.__class__.__name__
+        # for every Linear layer in a model..
+        if classname.find('Linear') != -1:
+            # get the number of the inputs
+            n = m.in_features
+            y = 1.0/np.sqrt(n)
+            m.weight.data.uniform_(-y, y)
+            m.bias.data.fill_(0)

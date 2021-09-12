@@ -13,6 +13,7 @@ import numpy as np
 import scipy
 from scipy.stats import norm
 #our libs
+import tqdm
 import matplotlib.pyplot as plt
 import seaborn as sns
 import utils
@@ -70,7 +71,7 @@ def gaussian_mixture(means, stds, p, args):
 def optimizer(net, vae, args):
     assert args.optimizer.lower() in ["sgd", "adam"], "Invalid Optimizer"
 
-    params = list(vae.parameters()) #+ list(vae.parameters())
+    params = net.parameters()#list(vae.parameters()) + list(net.parameters())
     if args.optimizer.lower() == "sgd":
 	       return optim.SGD(params, lr=args.lr, momentum=args.beta1, nesterov=args.nesterov)
     elif args.optimizer.lower() == "adam":
@@ -79,20 +80,21 @@ def optimizer(net, vae, args):
 def unif(size, eps=1E-7):
     return torch.clamp(torch.rand(size).cuda(), min=eps, max=1-eps)
 
-def test(net, args, name, loader, vae):
+def test(net, args, name, loader, vae, label=None):
     net.eval()
     vae.eval()
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
     U_ = unif(size=(100, args.dims))
     U = gauss.icdf(U_)
     #U.requires_grad = True
-    a = torch.arange(0, 10, device=device)
-    X = a*torch.ones((10, 10), device=device).long()
-    X = X.permute(1, 0).flatten()
-    #Y_hat = net.grad(U, X)
-    #print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
-    z = torch.randn(100, args.dims, device=device)
-    Y_hat = vae.decode(z, train=False)
+    #a = torch.arange(0, 10, device=device)
+    #X = a*torch.ones((10, 10), device=device).long()
+    #X = X.permute(1, 0).flatten()
+    Y_hat = net.grad_multi(U, label)
+    print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
+    print(Y_hat.mean(), Y_hat.std())
+    #z = torch.randn(100, args.dims, device=device)
+    Y_hat = vae.decode(Y_hat, train=False)
     print(Y_hat.shape, Y_hat.min(), Y_hat.max())
     utils.save_image(utils.make_grid(Y_hat, nrow=10),
         './celeba.png')
@@ -103,38 +105,44 @@ positive_params = []
 def train(net, optimizer, loader, vae, args):
     k = args.k
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
+    l = None
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
         dual_loss = 0.0
-        for idx, (Y, label) in enumerate(loader):
+        for idx, (Y, label) in tqdm.tqdm(enumerate(loader), total=len(loader)):
+            #l = label[0]
+            #break
             Y = Y.cuda()
-            label = label.cuda()
+            label = label.float().cuda()
+            label = net.bn1(label)
             u = unif(size=(args.batch_size, args.dims))
             u = gauss.icdf(u)
             optimizer.zero_grad()
-            #alpha, beta = net(u)
+            alpha, beta = net(u)
             #X = net.to_onehot(label)
             #print(Y.shape, label.shape, label.min(), label.max())
+            #print(beta.shape)
             #print(label)
             Y_recon, mu, logvar = vae(Y)
-            loss = loss_function(Y_recon, Y, mu, logvar) #+ dual(U=u, Y_hat=Y_hat, Y=z, eps=args.eps)
+            #loss = loss_function(Y_recon, Y, mu, logvar) #+ dual(U=u, Y_hat=Y_hat, Y=z, eps=args.eps)
             #l1 = loss.item()
-            #q_loss = dual(U=u, Y_hat=(alpha, beta), Y=mu.detach(), X=X, eps=args.eps)
-            #if q_loss.item() > 0:
-            #    loss += q_loss
+            q_loss = dual(U=u, Y_hat=(alpha, beta), Y=mu.detach(), X=label, eps=args.eps)
+            #q_loss = dual_unconditioned(U=u, Y_hat=alpha, Y=mu.detach(), eps=args.eps)
+            loss = q_loss # +=
             #l2 = loss.item()
             #dual_loss += l2 - l1
 
             loss.backward()
             optimizer.step()
-            for p in positive_params:
-            	p.data.copy_(torch.relu(p.data))
+            #for p in positive_params:
+            #	p.data.copy_(torch.relu(p.data))
             running_loss += loss.item()
+        #break
 
         print('Epoch %d : %.5f %.5f' %
             (epoch, running_loss/len(loader.dataset), dual_loss/len(loader.dataset)))
 
-    test(net, args, name='imgs/trained.png', loader=loader, vae=vae)
+    #test(net, args, name='imgs/trained.png', loader=loader, vae=vae, label=l)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -170,12 +178,14 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     torch.cuda.set_device('cuda:0')
-    net = ConditionalConvexQuantile(xdim=10,
+    net = ConditionalConvexQuantile(xdim=40,
                                     args=args,
-                                    a_hid=128,
-                                    a_layers=2,
-                                    b_hid=128,
+                                    a_hid=2*args.dims,
+                                    a_layers=3,
+                                    b_hid=2*args.dims,
                                     b_layers=1)
+
+    net.apply(net.weights_init_uniform_rule)
     '''
     net = ICNN_LastInp_Quadratic(input_dim=args.dims,
                                  hidden_dim=512,#1024,#512
@@ -187,13 +197,13 @@ if __name__ == "__main__":
               hidden_dims=[32, 64, 128, 256, 512]
               )
 
-    for p in list(net.parameters()):
-        if hasattr(p, 'be_positive'):
-            positive_params.append(p)
-        p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
+    #for p in list(net.parameters()):
+    #    if hasattr(p, 'be_positive'):
+    #        positive_params.append(p)
+    #    p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
 
     if len(args.weights) > 0:
-        load(net, args.weights + '/net.pth')
+        #load(net, args.weights + '/net.pth')
         load(vae, args.weights + '/vae.pth')
 
     transform_train = transforms.Compose([
@@ -201,7 +211,7 @@ if __name__ == "__main__":
         transforms.ToTensor(),
     ])    
 
-    trainset = torchvision.datasets.CelebA(root='./data', split='train', download=True, transform=transform_train)
+    trainset = torchvision.datasets.CelebA(root='./data', split='all', download=True, transform=transform_train)
     loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=0)
     optimizer = optimizer(net, vae, args)
     net.cuda()

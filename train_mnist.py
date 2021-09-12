@@ -156,27 +156,6 @@ def test(net, args, name, loader):
 
 positive_params = []
 
-def dual(U, Y_hat, Y, X, eps=0):
-    alpha, beta = Y_hat # alpha(U) + beta(U)^{T}X
-    loss = torch.mean(alpha)
-    Y = Y.permute(1, 0)
-    X = X.permute(1, 0)
-    BX = torch.mm(beta, X)
-    UY = torch.mm(U, Y)
-    # (U, Y), (U, X), beta.shape(bs, nclass), X.shape(bs, nclass)
-    #print(BX.shape, UY.shape, alpha.shape)
-    psi = UY - alpha - BX
-    sup, _ = torch.max(psi, dim=0)
-    #print(sup.shape)
-    loss += torch.mean(sup)
-
-    if eps == 0:
-        return loss
-
-    l = torch.exp((psi-sup)/eps)
-    loss += eps*torch.mean(l)
-    return loss
-
 def train(net, optimizer, loader, args):
     k = args.k
     #eg = Rings()#EightGaussian()
@@ -189,7 +168,6 @@ def train(net, optimizer, loader, args):
             optimizer.zero_grad()
             alpha, beta = net(u)
             X = net.to_onehot(label)
-            #X = net.fc_x(X)
             loss = dual(U=u, Y_hat=(alpha, beta), Y=Y, X=X, eps=args.eps)
             loss.backward()
             optimizer.step()
@@ -197,8 +175,8 @@ def train(net, optimizer, loader, args):
                 p.data.copy_(torch.relu(p.data))
             running_loss += loss.item()
 
-        if epoch % (args.epoch // 50) == 0:
-            print('%.5f' %
+        #if epoch % (args.epoch // 50) == 0:
+        print('%.5f' %
             (running_loss/(idx+1)))
 
     test(net, args, name='imgs/trained.png', loader=loader)
@@ -224,7 +202,7 @@ if __name__ == "__main__":
     parser.add_argument('--iters', default=1000, type=int)
     parser.add_argument('--mean', default=0, type=int)
     parser.add_argument('--std', default=1, type=int)
-    parser.add_argument('--dims', default=2, type=int)
+    parser.add_argument('--dims', default=784, type=int)
     parser.add_argument('--m', default=10, type=int)
     parser.add_argument('--n', default=5000, type=int)
     parser.add_argument('--k', default=100, type=int)
@@ -238,13 +216,19 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     torch.cuda.set_device('cuda:0')
-    net = ConditionalConvexQuantile(xdim=10, args=args)
-
+    net = ConditionalConvexQuantile(xdim=10,
+                                    args=args,
+                                    a_hid=512,
+                                    a_layers=3,
+                                    b_hid=512,
+                                    b_layers=1)
+    #net.apply(net.weights_init_uniform_rule)
+    
     for p in list(net.parameters()):
         if hasattr(p, 'be_positive'):
             positive_params.append(p)
         p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
-
+    
     ds = Synthetic(args, n=args.n)
     loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
     optimizer = optimizer(net, args)

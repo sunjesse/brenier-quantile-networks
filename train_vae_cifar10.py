@@ -108,6 +108,7 @@ def train(net, optimizer, loader, vae, args):
         dual_loss = 0.0
         for idx, (Y, label) in enumerate(loader):
             Y = Y.cuda()
+            Y = F.interpolate(Y, scale_factor=2)
             label = label.cuda()
             u = unif(size=(args.batch_size, args.dims))
             u = gauss.icdf(u)
@@ -178,7 +179,9 @@ if __name__ == "__main__":
                                  num_layer=3)
     '''
     vae = VAE(in_channels=3,
-              latent_dim=args.dims)
+              latent_dim=args.dims,
+              hidden_dims=[32, 64, 128, 256, 512]
+              )
 
     for p in list(net.parameters()):
         if hasattr(p, 'be_positive'):

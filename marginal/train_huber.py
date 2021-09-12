@@ -19,46 +19,6 @@ from gsw import GSW
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 from gen_data import *
 
-class Synthetic(data.Dataset):
-    def __init__(self, args,  n=1000):
-        self.n = n
-        np.random.seed(0)
-        #self.y = np.random.normal(loc=0, scale=1, size=(self.n, 2))
-        #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,-2],[-2,5]]), size=(self.n))
-
-        #torch.manual_seed(0)
-        #self.u = torch.rand(self.n, args.dims)
-        #self.y = np.random.multivariate_normal(mean=[0, 0], cov=np.array([[1,0],[0,1]]), size=(self.n))
-
-        #uniform
-        #self.y1 = torch.rand(size=(self.n, 1))*5 + 1
-        #self.y2 = torch.rand(size=(self.n, 1))*3 + 2
-        #self.y = torch.cat([self.y1, self.y2], dim=1)
-
-        #exp
-        #self.y1 = np.random.exponential(scale=10, size=(self.n, 1))
-        #self.y2 = np.random.exponential(scale=2, size=(self.n, 1))
-        #self.y = np.concatenate([self.y1, self.y2], axis=1)
-
-        #gaussian checkerboard
-        self.y = np.load('../data/synthetic/bary_ot_checkerboard_3.npy', allow_pickle=True).tolist()
-        self.y = self.y['Y']
-        
-        '''
-        self.y, _ = make_spiral(n_samples_per_class=self.n, n_classes=1,
-            n_rotations=2.5, gap_between_spiral=0.1, noise=0.2,
-                gap_between_start_point=0.1, equal_interval=True)
-        '''
-    def __len__(self):
-        return self.n
-
-    def __getitem__(self, i):
-        #x = torch.empty(args.dims)
-        #x[self.u[i] < 0.5] = 0.5
-        #x[self.u[i] >= 0.5] = 0.75
-        #u = torch.cat([x, self.u[i]], dim=-1).float()
-        return torch.from_numpy(self.y[i]).float()#, self.u[i].float()#, torch.from_numpy(self.x[i]).float()
-
 class QNN(nn.Module):
     def __init__(self, args):
         super(QNN, self).__init__()
@@ -70,16 +30,6 @@ class QNN(nn.Module):
             nn.BatchNorm1d(128),
             nn.ReLU(True),
             nn.Linear(128, args.dims))
-        '''
-        self.L = nn.Linear(args.dims, args.dims)
-        with torch.no_grad():
-            self.L.weight.copy_(torch.eye(args.dims))
-        mask = torch.tril(torch.ones(args.dims, args.dims))
-        self.L.weight.register_hook(self.get_zero_grad_hook(mask))
-        self.L_val = nn.Linear(args.dims, args.dims)
-        '''
-       # with torch.no_grad():
-       #     self.L.weight.div_(torch.norm(self.L.weight, dim=1, keepdim=True))
         	
     def forward(self, x, train=True):
         x = self.net(x)
