@@ -106,8 +106,8 @@ def train(net, optimizer, loader, vae, args):
         running_loss = 0.0
         dual_loss = 0.0
         for idx, (Y, label) in tqdm.tqdm(enumerate(loader), total=len(loader)):
-            #l = label[0]
-            #break
+            l = label[0]
+            break
             Y = Y.cuda()
             label = label.float().cuda()
             label = net.f(label)
@@ -127,13 +127,13 @@ def train(net, optimizer, loader, vae, args):
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
-        #break
+        break
 
         print('Epoch %d : %.5f %.5f' %
             (epoch, running_loss/len(loader.dataset), dual_loss/len(loader.dataset)))
 
-        test(net, args, name='imgs/trained.png', loader=loader, vae=vae, label=l)
-        net.train()
+    test(net, args, name='imgs/trained.png', loader=loader, vae=vae, label=l)
+        #net.train()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -183,7 +183,7 @@ if __name__ == "__main__":
               )
 
     if len(args.weights) > 0:
-        #load(net, args.weights + '/net.pth')
+        load(net, args.weights + '/net.pth')
         load(vae, args.weights + '/vae.pth')
 
     transform_train = transforms.Compose([

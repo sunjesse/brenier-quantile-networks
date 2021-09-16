@@ -264,17 +264,7 @@ class ConditionalConvexQuantile(nn.Module):
                            xdim=self.xdim)
             '''
             # MLP
-            self.f = nn.Sequential(nn.Linear(40, 128),
-                                   nn.BatchNorm1d(128),
-                                   nn.ReLU(inplace=True),
-                                   nn.Linear(128, 128),
-                                   nn.BatchNorm1d(128),
-                                   nn.ReLU(inplace=True),
-                                   nn.Linear(128, self.xdim),
-                                   nn.BatchNorm1d(self.xdim, affine=False))
-            '''
             self.f = nn.BatchNorm1d(self.xdim, affine=False)
-            '''
 
         #self.bn1 = nn.BatchNorm1d(self.xdim, momentum=1.0, affine=False)
         
