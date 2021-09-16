@@ -124,7 +124,7 @@ def train(net, optimizer, loader, vae, args):
             #else:
             q_loss = dual(U=u, Y_hat=(alpha, beta), Y=mu.detach(), X=X, eps=args.eps)
             #if q_loss.item() > 0:
-            loss += q_loss#dual(U=u, Y_hat=(alpha, beta), Y=z.detach(), X=X, eps=args.eps)
+            loss += q_loss
             l2 = loss.item()
             dual_loss += l2 - l1
 

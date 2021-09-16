@@ -71,7 +71,7 @@ def gaussian_mixture(means, stds, p, args):
 def optimizer(net, vae, args):
     assert args.optimizer.lower() in ["sgd", "adam"], "Invalid Optimizer"
 
-    params = net.parameters()#list(vae.parameters()) + list(net.parameters())
+    params = list(net.parameters()) # + list(vae.parameters())
     if args.optimizer.lower() == "sgd":
 	       return optim.SGD(params, lr=args.lr, momentum=args.beta1, nesterov=args.nesterov)
     elif args.optimizer.lower() == "adam":
@@ -82,14 +82,10 @@ def unif(size, eps=1E-7):
 
 def test(net, args, name, loader, vae, label=None):
     net.eval()
-    vae.eval()
+    #vae.eval()
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
     U_ = unif(size=(100, args.dims))
     U = gauss.icdf(U_)
-    #U.requires_grad = True
-    #a = torch.arange(0, 10, device=device)
-    #X = a*torch.ones((10, 10), device=device).long()
-    #X = X.permute(1, 0).flatten()
     Y_hat = net.grad_multi(U, label)
     print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
     print(Y_hat.mean(), Y_hat.std())
@@ -114,35 +110,30 @@ def train(net, optimizer, loader, vae, args):
             #break
             Y = Y.cuda()
             label = label.float().cuda()
-            label = net.bn1(label)
+            label = net.f(label)
             u = unif(size=(args.batch_size, args.dims))
             u = gauss.icdf(u)
             optimizer.zero_grad()
             alpha, beta = net(u)
-            #X = net.to_onehot(label)
-            #print(Y.shape, label.shape, label.min(), label.max())
-            #print(beta.shape)
-            #print(label)
             Y_recon, mu, logvar = vae(Y)
             #loss = loss_function(Y_recon, Y, mu, logvar) #+ dual(U=u, Y_hat=Y_hat, Y=z, eps=args.eps)
             #l1 = loss.item()
             q_loss = dual(U=u, Y_hat=(alpha, beta), Y=mu.detach(), X=label, eps=args.eps)
             #q_loss = dual_unconditioned(U=u, Y_hat=alpha, Y=mu.detach(), eps=args.eps)
-            loss = q_loss # +=
+            loss = q_loss
             #l2 = loss.item()
             #dual_loss += l2 - l1
 
             loss.backward()
             optimizer.step()
-            #for p in positive_params:
-            #	p.data.copy_(torch.relu(p.data))
             running_loss += loss.item()
         #break
 
         print('Epoch %d : %.5f %.5f' %
             (epoch, running_loss/len(loader.dataset), dual_loss/len(loader.dataset)))
 
-    #test(net, args, name='imgs/trained.png', loader=loader, vae=vae, label=l)
+        test(net, args, name='imgs/trained.png', loader=loader, vae=vae, label=l)
+        net.train()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -186,21 +177,10 @@ if __name__ == "__main__":
                                     b_layers=1)
 
     net.apply(net.weights_init_uniform_rule)
-    '''
-    net = ICNN_LastInp_Quadratic(input_dim=args.dims,
-                                 hidden_dim=512,#1024,#512
-                                 activation='celu',
-                                 num_layer=3)
-    '''
     vae = VAE(in_channels=3,
               latent_dim=args.dims,
               hidden_dims=[32, 64, 128, 256, 512]
               )
-
-    #for p in list(net.parameters()):
-    #    if hasattr(p, 'be_positive'):
-    #        positive_params.append(p)
-    #    p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
 
     if len(args.weights) > 0:
         #load(net, args.weights + '/net.pth')
@@ -221,8 +201,6 @@ if __name__ == "__main__":
     if args.save_model:
         save(net, args.folder, 'net')
         save(vae, args.folder, 'vae')
-    #mnist
-    #train(net, optimizer, loader, ds.y[:args.n].float().cuda(), args)
 
     if args.genTheor:
         Y = torch.from_numpy(ds.y)

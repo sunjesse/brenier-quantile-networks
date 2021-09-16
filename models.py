@@ -256,33 +256,33 @@ class ConditionalConvexQuantile(nn.Module):
 
             beta.append(nn.Sequential(nn.Linear(self.b_hid, self.xdim)))
             self.beta = nn.Sequential(*beta)
-
+            ''' 
+            # BiRNN
             self.f = BiRNN(input_size=args.dims,
                            hidden_size=args.dims*4,
                            num_layers=2,
                            xdim=self.xdim)
-
+            '''
+            # MLP
+            self.f = nn.Sequential(nn.Linear(40, 128),
+                                   nn.BatchNorm1d(128),
+                                   nn.ReLU(inplace=True),
+                                   nn.Linear(128, 128),
+                                   nn.BatchNorm1d(128),
+                                   nn.ReLU(inplace=True),
+                                   nn.Linear(128, self.xdim),
+                                   nn.BatchNorm1d(self.xdim, affine=False))
+            '''
+            self.f = nn.BatchNorm1d(self.xdim, affine=False)
+            '''
 
         #self.bn1 = nn.BatchNorm1d(self.xdim, momentum=1.0, affine=False)
         
-        '''
-        # MLP
-        self.f = nn.Sequential(nn.BatchNorm1d(self.xdim),
-                               nn.Linear(self.xdim, 64),
-                               nn.BatchNorm1d(64),
-                               nn.ReLU(inplace=True),
-                               nn.Linear(64, 64),
-                               nn.BatchNorm1d(64),
-                               nn.ReLU(inplace=True),
-                               nn.Linear(64, self.xdim),
-                               nn.BatchNorm1d(self.xdim, momentum=1.0, affine=False))
-        '''
 
     def forward(self, z, x=None):
         # we want onehot for categorical and non-ordinal x.
-        #x = self.to_onehot(x)
-        #x_ = self.fc_x(x)
         if self.xdim == 0:
+            print(True)
             return self.alpha(z)
         alpha = self.alpha(z)
         beta = self.beta(z) #torch.bmm(self.beta(z).unsqueeze(1), self.fc_x(x).unsqueeze(-1))
@@ -294,6 +294,7 @@ class ConditionalConvexQuantile(nn.Module):
             x = self.to_onehot(x)
         elif x != None:
             x = self.f(x)#self.bn1(x)
+            print(x)
             #print(x.shape)
         u.requires_grad = True 
         phi = self.alpha(u).sum()
@@ -306,15 +307,13 @@ class ConditionalConvexQuantile(nn.Module):
         if x == None:
             x = generate_x()
         x_s = x.shape[-1]
-        print(u.shape)
-        print(x.shape, x)
         for i in range(40):
             if x[i] == 1:
                 print(attributes[i], end=',')
-        print()
         x = x.expand(1, x_s)
         x = x.repeat(u.shape[0], 1).float().cuda()
-        x = self.bn1(x)
+        x = self.f(x)
+        print(x.min(), x.max())
         u.requires_grad = True
         phi = self.alpha(u).sum() + (torch.bmm(self.beta(u).unsqueeze(1), x.unsqueeze(-1)).squeeze(-1)).sum()
         d_phi = torch.autograd.grad(phi, u, create_graph=True)[0]
