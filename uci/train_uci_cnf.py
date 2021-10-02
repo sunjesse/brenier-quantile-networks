@@ -14,40 +14,34 @@ from scipy.stats import norm
 #our libs
 import matplotlib.pyplot as plt
 import seaborn as sns
-import utils
+from utils import *
 from dataloader import *
 from models import *
 from gen_data import *
 from tqdm import tqdm
-
+from flows import *
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-class QNN(nn.Module):
-    def __init__(self, args):
-        super(QNN, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(args.dims, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(True),
-            nn.Linear(128, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(True),
-            nn.Linear(128, args.dims))
+class CNF(nn.Module):
+    def __init__(self, args, n_blocks, input_size, hidden_size, n_hidden, cond_label_size):
+        super(CNF, self).__init__()
+        self.flow = RealNVP(n_blocks=n_blocks,
+                            input_size=input_size,
+                            hidden_size=hidden_size,
+                            n_hidden=n_hidden,
+                            cond_label_size=cond_label_size)
+        self.f = BiRNN(args.dims, hidden_size=args.dims*4, num_layers=2, xdim=cond_label_size)
+    
+    def forward(self, y, x):
+        h = self.f(x)
+        z, log_det = self.flow(y, h)
+        return z, log_det
 
-        self.f = BiRNN(input_size=args.dims,
-                        hidden_size=args.dims*4,
-                        num_layers=2,
-                        bn_last=False)
-
-        self.phi = nn.Sequential(
-            nn.Linear(args.dims, args.dims),
-            nn.BatchNorm1d(args.dims),
-            nn.ReLU(inplace=True),
-            nn.Linear(args.dims, args.dims))
-        	
-    def forward(self, u, x):
-        out = self.net(u) + self.f(x)
-        return self.phi(out)
+    def infer(self, x):
+        h = self.f(x)
+        z = self.flow.sample(cond=h)
+        y, log_det = self.flow.inverse(z, h)
+        return y, log_det
 
 def plot2d(Y, name):
     Y = Y.detach().cpu().numpy()
@@ -105,13 +99,20 @@ def test(net, args, name, loader):
     X, Y = loader.dataset.getXY()
     U = torch.ones(X.shape[0], args.dims)*args.quantile
     U = U.cuda()
-    X = X.cuda()
-    Y_hat = net(U, X)
+    Y_hat, _ = net.infer(X)
+    print(Y_hat.shape)
     epsilon = torch.abs(Y_hat - Y)
-    print(epsilon)
-    print('max : ' + str(epsilon.max()))
-    print('mae : ' + str(epsilon.mean()))
-    print('max and min points generated: ' + str(Y_hat.max()) + ' ' + str(Y_hat.min()))
+    ql = l1_quantile_loss(Y_hat, Y, U)
+    print('max : ' + str(epsilon.max().item()))
+    print('mae : ' + str(epsilon.mean().item()))
+    print('ql' + str(args.quantile*100) + ': ' + str(ql.item()))
+    Y_hat, Y, U = Y_hat.detach().cpu().numpy(), Y.detach().cpu().numpy(), U.detach().cpu().numpy()
+    print("rmse: " + str(rmse(Y, Y_hat)))
+    print("smape: " + str(smape(Y, Y_hat)))
+    #U = torch.ones(X.shape[0], args.dims)*0.9
+    #U = U.cuda()
+    #ql90 = l1_quantile_loss(torch.from_numpy(Y_hat).cuda(), torch.from_numpy(Y).cuda(), U.cuda())
+    #print("ql90: " + str(ql90.item()))
 
 def validate(net, loader, args):
     net.eval()
@@ -127,21 +128,22 @@ def validate(net, loader, args):
 
 def train(net, optimizer, loaders, args):
     train_loader, val_loader, test_loader = loaders
+    gaussian = torch.distributions.normal.Normal(loc=torch.zeros(args.dims).to(device), scale=torch.ones(args.dims).to(device))
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
         for idx, (X, Y) in tqdm(enumerate(train_loader), total=len(train_loader)):
-            U = torch.rand(size=(args.batch_size, args.dims))
             optimizer.zero_grad()
-            U = U.cuda()
-            Y_hat = net(U, X)
-            loss = huber_quantile_loss(Y_hat, Y, U) #MMD(Y_hat, Y)
+            z, log_det = net(Y, X)
+            log_pz = gaussian.log_prob(z)#torch.sum(gaussian.log_prob(z), dim=1, keepdim=True)
+            p_theta = log_pz + log_det
+            loss = -torch.mean(p_theta)
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
 
         print('%.5f' %
             (running_loss/args.iters))
-        validate(net, val_loader, args)
+        #validate(net, val_loader, args)
     test(net, args, name='imgs/trained.png', loader=test_loader)
 
 if __name__ == "__main__":
@@ -178,12 +180,13 @@ if __name__ == "__main__":
         args.dims = 6
 
     #trainloader, testloader = dataloader(args)
-    net = QNN(args)
+    net = CNF(args=args, input_size=args.dims, n_blocks=3, n_hidden=2, hidden_size=128, cond_label_size=args.dims)
     ds = [TimeSeriesDataset(dataset=args.dataset, device=device, split=x) for x in ['train', 'val', 'test']]
     loaders = [data.DataLoader(d, batch_size=args.batch_size, shuffle=True, drop_last=True) for d in ds]
     optimizer = optimizer(net, args)
     net.to(device)
     train(net, optimizer, loaders, args)
+
     '''
     Y = torch.from_numpy(ds.y)
     plotaxis(Y, name='imgs/theor')

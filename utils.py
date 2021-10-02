@@ -40,3 +40,47 @@ def load(model, weights):
     model.load_state_dict(
         torch.load(direct, map_location=lambda storage, loc: storage), strict=False)
     print('Loaded weights: ' + str(weights) + '!')
+
+def msis(target, lower_quantile, upper_quantile, seasonal_error, alpha):
+    r"""
+    .. math::
+
+        msis = mean(U - L + 2/alpha * (L-Y) * I[Y<L] + 2/alpha * (Y-U) * I[Y>U]) / seasonal\_error
+
+    See [SSA20]_ for more details.
+    """
+    numerator = np.mean(
+        upper_quantile
+        - lower_quantile
+        + 2.0 / alpha * (lower_quantile - target) * (target < lower_quantile)
+        + 2.0 / alpha * (target - upper_quantile) * (target > upper_quantile)
+    )
+
+    return numerator / seasonal_error
+
+def smape(target, forecast):
+    r"""
+    .. math::
+
+        smape = 2 * mean(|Y - \hat{Y}| / (|Y| + |\hat{Y}|))
+
+    See [HA21]_ for more details.
+    """
+    return 2 * np.mean(
+        np.abs(target - forecast) / (np.abs(target) + np.abs(forecast))
+    )
+
+def rmse(target, forecast):
+    if target.ndim == 2:
+        N = target.shape[0]*target.shape[1]
+    else:
+        N = target.shape[0]
+    mse = np.sum((target-forecast)**2)/N
+    return np.sqrt(mse)
+
+def quantile_loss(target: np.ndarray, forecast: np.ndarray, q: float) -> float:
+    r"""
+    .. math::
+        quantile\_loss = 2 * sum(|(Y - \hat{Y}) * (Y <= \hat{Y}) - q|)
+    """
+    return 2 * np.mean(np.abs((forecast - target) * ((target <= forecast) - q)))

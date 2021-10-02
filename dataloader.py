@@ -19,7 +19,7 @@ def MinMaxScaler(data):
   norm_data = numerator / (denominator + 1e-7)
   return norm_data
 
-def real_data_loading (data_name, seq_len):
+def real_data_loading(data_name, seq_len):
   """Load and preprocess real-world datasets.
   
   Args:

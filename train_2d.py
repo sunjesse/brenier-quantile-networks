@@ -22,6 +22,7 @@ from models import *
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 torch.autograd.set_detect_anomaly(True)
+
 class Synthetic(data.Dataset):
     def __init__(self, args,  n=1000):
         self.n = n
@@ -30,13 +31,13 @@ class Synthetic(data.Dataset):
         #self.y = np.random.multivariate_normal(mean=[2, 3], cov=np.array([[3,2],[2,5]]), size=(self.n))
 
         #torch.manual_seed(0)
-        '''
-        self.y, _ = make_spiral(n_samples_per_class=self.n, n_classes=1,
+        self.y, self.x = make_spiral(n_samples_per_class=self.n, n_classes=3,
             n_rotations=2.5, gap_between_spiral=0.1, noise=0.2,
                 gap_between_start_point=0.1, equal_interval=True)
         '''
 
         self.y, self.x = make_moons(n_samples=args.n, xy_ratio=2.0, x_gap=-0.2, y_gap=0.2, noise=0.1)
+        '''
 
     def __len__(self):
         return len(self.y)#self.y
@@ -114,7 +115,8 @@ def test(net, args, name, loader):
     U = unif(size=(1000, 2))
     U = gauss.icdf(U)
     X = torch.zeros(1000, device=device).long()
-    X[:500] = 1
+    X[:333] = 1
+    X[333: 667] = 2
     #print(X)
     Y_hat = net.grad(U, X)#= net.forward(U, grad=True).sum()
     #Y_hat = net.grad(U)
@@ -198,7 +200,7 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     torch.cuda.set_device('cuda:0')
-    net = ConditionalConvexQuantile(xdim=2, 
+    net = ConditionalConvexQuantile(xdim=3, 
                                     a_hid=512,
                                     a_layers=3,
                                     b_hid=512,

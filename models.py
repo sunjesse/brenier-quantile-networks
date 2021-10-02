@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ot_modules.icnn import *
+from supp.distribution_output import *
+from supp.piecewise_linear import *
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 attributes = ['5_o_Clock_Shadow', 'Arched_Eyebrows', 'Attractive', 'Bags_Under_Eyes', 'Bald', 'Bangs', 'Big_Lips', 'Big_Nose', 'Black_Hair', 'Blond_Hair', 'Blurry', 'Brown_Hair', 'Bushy_Eyebrows', 'Chubby', 'Double_Chin', 'Eyeglasses', 'Goatee', 'Gray_Hair', 'Heavy_Makeup', 'High_Cheekbones', 'Male', 'Mouth_Slightly_Open', 'Mustache', 'Narrow_Eyes', 'No_Beard', 'Oval_Face', 'Pale_Skin', 'Pointy_Nose', 'Receding_Hairline', 'Rosy_Cheeks', 'Sideburns', 'Smiling', 'Straight_Hair', 'Wavy_Hair', 'Wearing_Earrings', 'Wearing_Hat', 'Wearing_Lipstick', 'Wearing_Necklace', 'Wearing_Necktie', 'Young']
@@ -79,6 +81,69 @@ class BiRNN(nn.Module):
         if self.bn_last:
             return self.norm(out)
         return out
+
+class Spline(nn.Module):
+    def __init__(self, args):
+        super(Spline, self).__init__()
+        self.f = BiRNN(input_size=1,
+                        hidden_size=4,
+                        num_layers=2,
+                        xdim=50)
+        self.d_out = PiecewiseLinearOutput(num_pieces=50)
+        self.args_proj = self.d_out.get_args_proj(in_features=50)
+
+    def forward(self, x, y=None, u=None):
+        h = self.f(x)
+        gamma, slopes, knot_spacings = self.args_proj(h)
+        distr = PiecewiseLinear(gamma=gamma, slopes=slopes, knot_spacings=knot_spacings)
+        if y != None:
+            return distr.crps(y)
+        return distr.sample()
+
+class QuantileLayer(nn.Module):
+    """Define quantile embedding layer, i.e. phi in the IQN paper (arXiv: 1806.06923)."""
+
+    def __init__(self, num_output):
+        super(QuantileLayer, self).__init__()
+        self.n_cos_embedding = 64
+        self.num_output = num_output
+        self.output_layer = nn.Sequential(
+            nn.Linear(self.n_cos_embedding, self.n_cos_embedding),
+            nn.PReLU(),
+            nn.Linear(self.n_cos_embedding, num_output),
+        )
+
+    def forward(self, tau):
+        cos_embedded_tau = self.cos_embed(tau)
+        final_output = self.output_layer(cos_embedded_tau)
+        return final_output
+
+    def cos_embed(self, tau):
+        integers = torch.repeat_interleave(
+            torch.arange(0, self.n_cos_embedding).unsqueeze(dim=0),
+            repeats=tau.shape[-1],
+            dim=0,
+        ).to(tau.device)
+        return torch.cos(math.pi * tau.unsqueeze(dim=-1) * integers)
+
+class IQN(nn.Module):
+    def __init__(self, args):
+        super(IQN, self).__init__()
+        self.f = BiRNN(input_size=args.dims,
+                        hidden_size=args.dims*4,
+                        num_layers=2,
+                        xdim=50)
+        self.phi = QuantileLayer(num_output=50)
+        self.output_layer = nn.Sequential(nn.Linear(50, 50), 
+                        nn.Softplus(),
+                        nn.Linear(50, args.dims))
+	
+    def forward(self, tau, x):
+        h = self.f(x)
+        embedded_tau = self.phi(tau).squeeze(1)
+        new_input_data = h * (torch.ones_like(embedded_tau) + embedded_tau)
+        return self.output_layer(new_input_data)
+
 
 class MLPVAE(nn.Module):
     def __init__(self, args):
@@ -236,10 +301,12 @@ class ConditionalConvexQuantile(nn.Module):
 
         alpha = []
         alpha.append(nn.Sequential(nn.Linear(args.dims, self.a_hid),
+                                   #nn.BatchNorm1d(self.a_hid),
                                    nn.CELU(inplace=True)))
 
         for i in range(2, self.a_layers+1):
             alpha.append(nn.Sequential(nn.Linear(self.a_hid, self.a_hid),
+                                       #nn.BatchNorm1d(self.a_hid),
                                        nn.CELU(inplace=True)))
 
         alpha.append(nn.Sequential(nn.Linear(self.a_hid, 1)))
@@ -248,15 +315,16 @@ class ConditionalConvexQuantile(nn.Module):
         if self.xdim > 0:
             beta = []
             beta.append(nn.Sequential(nn.Linear(args.dims, self.b_hid),
+                                      #nn.BatchNorm1d(self.b_hid),
                                       nn.CELU(inplace=True)))
 
             for i in range(2, self.b_layers+1):
                 beta.append(nn.Sequential(nn.Linear(self.b_hid, self.b_hid),
+                                          #nn.BatchNorm1d(self.b_hid),
                                           nn.CELU(inplace=True)))
 
             beta.append(nn.Sequential(nn.Linear(self.b_hid, self.xdim)))
             self.beta = nn.Sequential(*beta)
-            ''' 
             # BiRNN
             self.f = BiRNN(input_size=args.dims,
                            hidden_size=args.dims*4,
@@ -266,13 +334,13 @@ class ConditionalConvexQuantile(nn.Module):
             # MLP
             self.f = nn.BatchNorm1d(self.xdim, affine=False)
 
+            ''' 
         #self.bn1 = nn.BatchNorm1d(self.xdim, momentum=1.0, affine=False)
         
 
     def forward(self, z, x=None):
         # we want onehot for categorical and non-ordinal x.
         if self.xdim == 0:
-            print(True)
             return self.alpha(z)
         alpha = self.alpha(z)
         beta = self.beta(z) #torch.bmm(self.beta(z).unsqueeze(1), self.fc_x(x).unsqueeze(-1))
@@ -284,7 +352,6 @@ class ConditionalConvexQuantile(nn.Module):
             x = self.to_onehot(x)
         elif x != None:
             x = self.f(x)#self.bn1(x)
-            print(x)
             #print(x.shape)
         u.requires_grad = True 
         phi = self.alpha(u).sum()
@@ -303,7 +370,6 @@ class ConditionalConvexQuantile(nn.Module):
         x = x.expand(1, x_s)
         x = x.repeat(u.shape[0], 1).float().cuda()
         x = self.f(x)
-        print(x.min(), x.max())
         u.requires_grad = True
         phi = self.alpha(u).sum() + (torch.bmm(self.beta(u).unsqueeze(1), x.unsqueeze(-1)).squeeze(-1)).sum()
         d_phi = torch.autograd.grad(phi, u, create_graph=True)[0]
