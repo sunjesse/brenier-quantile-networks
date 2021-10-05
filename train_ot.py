@@ -20,6 +20,7 @@ from ot_modules.icnn import *
 from gen_data import *
 from torchvision import datasets, transforms, utils
 from models import *
+from scipy.stats import ks_2samp
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -118,12 +119,16 @@ def test(net, args, name, loader, Y):
 
     #U = torch.rand(size=(args.n, args.dims), requires_grad=True).cuda()
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
-    U = unif(size=(2000, args.dims))
+    U = unif(size=(1000, args.dims))
     U = gauss.icdf(U)
-    X = torch.zeros((2000)).long().random_(0, 40).cuda()
-    Y_hat = net.grad(U, X)
+    X = torch.zeros((1000)).long().random_(0, 40).cuda()
+    Y_hat = net.grad(U, x=X)#None)
     print("max and min points generated: " + str(Y_hat.max()) + " " + str(Y_hat.min()))
+    Y_hat, y = Y_hat.flatten(), Y.y[:1000].flatten()
     print(Y_hat.mean(), Y_hat.std())#
+    print(Y_hat.shape, y.shape)
+    Y_hat = Y_hat.detach().cpu().numpy()
+    print(ks_2samp(Y_hat, y))
     
     if args.dims == 1:
         histogram(Y_hat, name) # uncomment for 1d case
@@ -145,7 +150,7 @@ def train(net, optimizer, loader, args):
             label = torch.zeros((args.batch_size)).long().random_(0, 40)
             label = label.cuda()
             X = net.to_onehot(label).cuda()
-            loss = dual(U=u, Y_hat=(alpha, beta), Y=Y, X=X, eps=args.eps)
+            loss = dual(U=u, Y_hat=(alpha, beta), Y=Y, X=X, eps=args.eps) #dual_unconditioned(U=u, Y_hat=alpha, Y=Y, eps=args.eps)
             loss.backward()
             optimizer.step()
             #for p in positive_params:
@@ -181,6 +186,7 @@ if __name__ == "__main__":
     parser.add_argument('--genTheor', action='store_true')
     parser.add_argument('--gaussian_support', action='store_true')
     parser.add_argument('--eps', default=0, type=float)
+    parser.add_argument('--ab_dims', default=2048, type=int)
     args = parser.parse_args()
 
     print("Input arguments:")
@@ -191,10 +197,10 @@ if __name__ == "__main__":
 
     net = ConditionalConvexQuantile(xdim=40,
                                     args=args,
-                                    a_hid=3*2048, 
-                                    a_layers=3,
-                                    b_hid=3*2048,
-                                    b_layers=1)
+                                    a_hid=2048, #args.ab_dims, 
+                                    a_layers=args.ab_dims,
+                                    b_hid=2048, #args.ab_dims,
+                                    b_layers=args.ab_dims)
 
     #net.apply(net.weights_init_uniform_rule)
 
