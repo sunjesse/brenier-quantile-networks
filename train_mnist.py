@@ -154,7 +154,6 @@ def test(net, args, name, loader):
         plot2d(Y_hat, name='imgs/2d.png') # 2d contour plot
         plotaxis(Y_hat, name='imgs/train')
 
-positive_params = []
 
 def train(net, optimizer, loader, args):
     k = args.k
@@ -171,8 +170,6 @@ def train(net, optimizer, loader, args):
             loss = dual(U=u, Y_hat=(alpha, beta), Y=Y, X=X, eps=args.eps)
             loss.backward()
             optimizer.step()
-            for p in positive_params:
-                p.data.copy_(torch.relu(p.data))
             running_loss += loss.item()
 
         #if epoch % (args.epoch // 50) == 0:
@@ -222,12 +219,8 @@ if __name__ == "__main__":
                                     a_layers=3,
                                     b_hid=512,
                                     b_layers=1)
-    #net.apply(net.weights_init_uniform_rule)
-    
-    for p in list(net.parameters()):
-        if hasattr(p, 'be_positive'):
-            positive_params.append(p)
-        p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
+
+    net.apply(net.weights_init_uniform_rule)
     
     ds = Synthetic(args, n=args.n)
     loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=True)

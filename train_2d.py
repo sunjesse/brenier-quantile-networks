@@ -32,7 +32,7 @@ class Synthetic(data.Dataset):
 
         #torch.manual_seed(0)
         self.y, self.x = make_spiral(n_samples_per_class=self.n, n_classes=3,
-            n_rotations=2.5, gap_between_spiral=0.1, noise=0.2,
+            n_rotations=1.5, gap_between_spiral=1.0, noise=0.2,
                 gap_between_start_point=0.1, equal_interval=True)
         '''
 
@@ -55,7 +55,7 @@ def plot2d(Y, name, labels=None):
     fig = plt.figure(figsize=(5, 5))
     ax = fig.add_subplot(1, 1, 1)
     #sns.kdeplot(Y[:, 0], Y[:, 1], cmap='Blues', shade=True, thresh=0)
-    sns.scatterplot(x=Y[:,0], y=Y[:,1], hue=labels)
+    sns.scatterplot(x=Y[:,0], y=Y[:,1], hue=labels, s=5)
     '''
     H, _, _ = np.histogram2d(Y[:, 0], Y[:, 1], 200, range=[[-4, 4], [-4, 4]])
     plt.imshow(H.T, cmap='BuPu')
@@ -112,11 +112,11 @@ def test(net, args, name, loader):
             print(p)
     '''
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
-    U = unif(size=(1000, 2))
+    U = unif(size=(5000, 2))
     U = gauss.icdf(U)
-    X = torch.zeros(1000, device=device).long()
-    X[:333] = 1
-    X[333: 667] = 2
+    X = torch.zeros(5000, device=device).long()
+    X[:5000//3] = 1
+    X[5000//3: 10000//3] = 2
     #print(X)
     Y_hat = net.grad(U, X)#= net.forward(U, grad=True).sum()
     #Y_hat = net.grad(U)
@@ -204,7 +204,7 @@ if __name__ == "__main__":
                                     a_hid=512,
                                     a_layers=3,
                                     b_hid=512,
-                                    b_layers=1,
+                                    b_layers=3,
                                     args=args)
 
     #for p in list(net.parameters()):
@@ -222,7 +222,7 @@ if __name__ == "__main__":
 
     if args.genTheor:
         Y = torch.from_numpy(ds.y)
-        plotaxis(Y, name='imgs/theor')
-        plot2d(Y, name='imgs/theor.png')
+        #plotaxis(Y, name='imgs/theor')
+        plot2d(Y, labels=ds.x, name='imgs/theor.png')
 
     print("Training completed!")

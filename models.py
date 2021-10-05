@@ -297,7 +297,18 @@ class ConditionalConvexQuantile(nn.Module):
         self.a_layers=a_layers
         self.b_hid=b_hid
         self.b_layers=b_layers
-        
+
+        self.alpha = ICNN_LastInp_Quadratic(input_dim=args.dims,
+                                    hidden_dim=self.a_hid,#1024,#512
+                                    activation='celu',
+                                    num_layer=self.a_layers)
+        self.beta = ICNN_LastInp_Quadratic(input_dim=args.dims,
+                                    hidden_dim=self.b_hid,
+                                    activation='celu',
+                                    num_layer=self.b_layers,
+                                    out_dim=self.xdim)
+
+        '''
 
         alpha = []
         alpha.append(nn.Sequential(nn.Linear(args.dims, self.a_hid),
@@ -326,17 +337,17 @@ class ConditionalConvexQuantile(nn.Module):
             beta.append(nn.Sequential(nn.Linear(self.b_hid, self.xdim)))
             self.beta = nn.Sequential(*beta)
             # BiRNN
-            self.f = BiRNN(input_size=args.dims,
-                           hidden_size=args.dims*4,
-                           num_layers=2,
-                           xdim=self.xdim)
-            '''
-            # MLP
-            self.f = nn.BatchNorm1d(self.xdim, affine=False)
+        '''
+        self.f = BiRNN(input_size=args.dims,
+                       hidden_size=args.dims*4,
+                       num_layers=2,
+                       xdim=self.xdim)
 
-            ''' 
+            # MLP
+
         #self.bn1 = nn.BatchNorm1d(self.xdim, momentum=1.0, affine=False)
-        
+
+        #self.f = nn.BatchNorm1d(self.xdim, affine=False)
 
     def forward(self, z, x=None):
         # we want onehot for categorical and non-ordinal x.
@@ -352,7 +363,6 @@ class ConditionalConvexQuantile(nn.Module):
             x = self.to_onehot(x)
         elif x != None:
             x = self.f(x)#self.bn1(x)
-            #print(x.shape)
         u.requires_grad = True 
         phi = self.alpha(u).sum()
         if self.xdim != 0 and x != None:

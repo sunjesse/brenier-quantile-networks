@@ -124,7 +124,8 @@ def train(net, optimizer, loader, vae, args):
             #else:
             q_loss = dual(U=u, Y_hat=(alpha, beta), Y=mu.detach(), X=X, eps=args.eps)
             #if q_loss.item() > 0:
-            loss += q_loss
+            if epoch >= (args.epoch+1)//2:
+                loss += q_loss
             l2 = loss.item()
             dual_loss += l2 - l1
 
@@ -156,7 +157,7 @@ if __name__ == "__main__":
     parser.add_argument('--iters', default=1000, type=int)
     parser.add_argument('--mean', default=0, type=int)
     parser.add_argument('--std', default=1, type=int)
-    parser.add_argument('--dims', default=3, type=int)
+    parser.add_argument('--dims', default=5, type=int)
     parser.add_argument('--m', default=10, type=int)
     parser.add_argument('--n', default=5000, type=int)
     parser.add_argument('--k', default=100, type=int)
@@ -177,9 +178,9 @@ if __name__ == "__main__":
     net = ConditionalConvexQuantile(xdim=10, 
                                     args=args,
                                     a_hid=128, 
-                                    a_layers=2,
+                                    a_layers=3,
                                     b_hid=128,
-                                    b_layers=2)
+                                    b_layers=1)
     '''
     vae = VAE(image_size=32,
             channel_num=1,
