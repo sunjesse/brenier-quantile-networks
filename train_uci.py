@@ -69,15 +69,57 @@ def l1_quantile_loss(output, target, tau, reduce=True):
     loss = (tau - (u.detach() <= 0).float()).mul_(u)
     return loss.mean() if reduce else loss
 
+
+def plot_timeseries(X, preds, i):
+    X = X.detach().cpu().numpy()
+    f = plt.figure(figsize=(15,3))
+    ax1 = f.add_subplot(141)
+    ax2 = f.add_subplot(142)
+    ax3 = f.add_subplot(143)
+    ax4 = f.add_subplot(144)
+    axs = [ax1, ax2, ax3, ax4]
+    for pltnum, k in enumerate([0, 1, 2, 3]):
+        xs = X[i, :, k]
+        t = np.arange(0, xs.shape[0], 1)
+        axs[pltnum].plot(t, xs)
+        for idx, y in enumerate(preds):
+            ys = y.detach().cpu().numpy()
+            ys = ys[i, :, k]
+            p_t, p_x = t[-1], xs[-1]
+            axs[pltnum].plot([p_t+j for j in range(11)], [p_x]+[ys[t] for t in range(10)], label=str((idx+1)/10.))
+    #plt.legend(loc=5)
+    f.tight_layout()
+    f.savefig("./ts.png")
+    print('saved fig!')
+
 def test(net, args, name, loader):
     net.eval()
     X, Y = loader.dataset.getXY()
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
-    U = torch.ones(X.shape[0], args.dims)*args.quantile
-    U = U.cuda()
-    U = gauss.icdf(U)
-    X = X.cuda()
-    Y_hat = net.grad(U, X, onehot=False)
+    X = X.cuda()   
+    wd = 10
+    preds = []
+    for q in [0.5]:
+        U = torch.ones(X.shape[0], args.dims)*q
+        U = U.cuda()
+        U = gauss.icdf(U)
+        Xt = X
+        for ti in range(wd):
+            Y_hat = net.grad(U, Xt[:, ti:], onehot=False)
+            Xt = torch.cat([Xt, Y_hat.unsqueeze(1).detach()], axis=1)
+
+    for q in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
+        U = torch.ones(X.shape[0], args.dims)*q
+        U = U.cuda()
+        U = gauss.icdf(U)
+        Xc = X
+        for ti in range(wd):
+            Y_hat = net.grad(U, Xt[:, ti:-wd+ti], onehot=False)
+            Xc = torch.cat([Xc[:, 1:], Y_hat.unsqueeze(1).detach()], axis=1)
+        preds.append(Xc[:, -wd:])
+    #preds = preds[:4] + [Xt[:, -3:]] + preds[4:]
+    plot_timeseries(X, preds, 0)
+    '''
     epsilon = torch.abs(Y_hat - Y)
     ql = l1_quantile_loss(Y_hat, Y, U)
     print('max : ' + str(epsilon.max().item()))
@@ -91,7 +133,7 @@ def test(net, args, name, loader):
     Y_hat = net.grad(U, X, onehot=False)
     ql90 = l1_quantile_loss(Y_hat, torch.from_numpy(Y).cuda(), U.cuda())
     print("ql90: " + str(ql90.item()))
-
+    '''
 def validate(net, loader, args):
     net.eval()
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())

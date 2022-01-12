@@ -298,7 +298,6 @@ class ConditionalConvexQuantile(nn.Module):
         self.b_hid=b_hid
         self.b_layers=b_layers
 
-        '''
         self.alpha = ICNN_LastInp_Quadratic(input_dim=args.dims,
                                     hidden_dim=self.a_hid,#1024,#512
                                     activation='celu',
@@ -338,17 +337,16 @@ class ConditionalConvexQuantile(nn.Module):
             beta.append(nn.Sequential(nn.Linear(self.b_hid, self.xdim)))
             self.beta = nn.Sequential(*beta)
             # BiRNN
-            '''
-            self.f = BiRNN(input_size=args.dims,
-                           hidden_size=args.dims*4,
-                           num_layers=2,
-                           xdim=self.xdim)
-            '''
+        '''
+        self.f = BiRNN(input_size=args.dims,
+                       hidden_size=args.dims*4,
+                       num_layers=2,
+                       xdim=self.xdim)
             # MLP
 
         #self.bn1 = nn.BatchNorm1d(self.xdim, momentum=1.0, affine=False)
 
-        self.f = nn.BatchNorm1d(self.xdim, affine=False)
+        #self.f = nn.BatchNorm1d(self.xdim, affine=False)
 
     def forward(self, z, x=None):
         # we want onehot for categorical and non-ordinal x.
