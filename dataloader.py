@@ -195,8 +195,8 @@ class TimeSeriesDataset(data.Dataset):
         return self.data.shape[0]
 
     def __getitem__(self, i):
-        x = torch.tensor(self.data[i][:-1, :]).float()
-        y = torch.tensor(self.data[i][-1, :]).float()
+        x = torch.tensor(self.data[i][:12, :]).float()
+        y = torch.tensor(self.data[i][12, :]).float()
         #print(x.shape, y.shape)
         return x.to(self.device), y.to(self.device)
 
@@ -212,8 +212,27 @@ if __name__ == '__main__':
     np.save('./data/stock/data_24.npy', data)
     print(data.shape)
     '''
-    ds = TimeSeriesDataset(dataset='stock')
-    dl = data.DataLoader(ds, batch_size=2, shuffle=True, drop_last=True)
-    for idx, batch in enumerate(dl):
-        x = batch
-        break
+    import seaborn as sns
+    ds = TimeSeriesDataset(device='cpu',dataset='energy')
+    x, y = ds.getXY()
+    d = torch.cat([x, y.unsqueeze(1)], axis=1).numpy()
+    d = d.reshape(-1, d.shape[-1])
+    #d = np.random.normal(0, 5, size=(1000, 5))
+    print(d.shape)
+    #c = np.corrcoef(d.T)
+    c = np.var(d.T, axis=1)
+    idx = np.argpartition(c, -4)[-4:]
+    print(c.shape)
+    print(c)
+    print(idx)
+    #ax = sns.heatmap(
+    #    c, 
+    #    vmin=-1, vmax=1, center=0,
+    #    cmap=sns.diverging_palette(20, 220, n=200),
+    #    square=True)
+    #fig = ax.get_figure()
+    #fig.savefig("./ncor.png") 
+    #dl = data.DataLoader(ds, batch_size=2, shuffle=True, drop_last=True)
+    #for idx, batch in enumerate(dl):
+    #    x = batch
+    #    break

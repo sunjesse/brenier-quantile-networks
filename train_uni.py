@@ -19,10 +19,14 @@ from dataloader import *
 from models import *
 from gen_data import *
 from tqdm import tqdm
+from utils2 import *
+from sklearn.preprocessing import MinMaxScaler
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-N = 10
-Qs = [0.1]#, 0.25, 0.5, 0.75, 0.9]
+N = 30 
+wd = 100 
+Qs = [0.025, 0.25, 0.5, 0.75, 0.975]
+scaler = MinMaxScaler()
 
 def plot2d(Y, name):
     Y = Y.detach().cpu().numpy()
@@ -72,48 +76,77 @@ def l1_quantile_loss(output, target, tau, reduce=True):
     return loss.mean() if reduce else loss
 
 
-def plot_timeseries(X, preds, i, Ytrue, wd=10):
-    h, w = 10, 1
-    feats = [27]
+def plot_timeseries(X, preds, i, Ytrue):
+    h, w = 1, 1
+    feats = [0]
     assert len(feats) == w
 
     X = X.detach().cpu().numpy()
     Ytrue = Ytrue.detach().cpu().numpy()
-    f, axs = plt.subplots(h, w, figsize=(14, 12), sharex=True, sharey=True)
+
+    X = scaler.inverse_transform(X[:, :, 0])[:, :, None]
+    Ytrue = scaler.inverse_transform(Ytrue[:, :, 0])[:, :, None]
+
+    print(Ytrue.shape)
+    f, axs = plt.subplots(h, w, figsize=(14, 14), sharex=True, sharey=True)
     for c, i in enumerate(list(np.random.randint(0, X.shape[0], size=(h)))):
         for pltnum, k in enumerate(feats):
             xs = X[i, :, k]
             yt = Ytrue[i, :, k]
             t = np.arange(0, xs.shape[0], 1)
-            axs[c].plot(t, xs)
+            axs.plot(t, xs)
             prev = None
             for idx, y in enumerate(preds):
                 ys = y.detach().cpu().numpy()
-                ys = ys[i]#, :, k]
+                ys = scaler.inverse_transform(ys[:, :, 0])[:, :, None]
+                ys = ys[i, :, k]
                 p_t, p_x = t[-1], xs[-1]
                 ys = [p_x]+[ys[t] for t in range(wd)]
                 ts = [p_t+j for j in range(wd+1)]
-                #if prev != None:
-                #    axs[c, pltnum].fill_between(ts, prev, ys, alpha=(1-abs(idx-(N-1)/2.)/(N/2.)), color='g', edgecolor=None)
-                #if idx == (N-1)//2:
-                axs[c].plot(ts, ys, label=str(Qs[idx])+" quantile level" if c+pltnum == 0 else None)#color='r') #[p_x]+[ys[t] for t in range(wd)], label=str((idx+1)/10.))
+                if prev != None:
+                    if idx in [0, 4]:
+                        l = '95% confidence interval'
+                    elif idx in [3]:
+                        l = '50% confidence interval'
+                    else:
+                        l = None
+                    axs.fill_between(ts, prev, ys, alpha=0.75*(1-abs(idx-2.5)/3), color='g', edgecolor=None, label=l)
+                if idx == 2:
+                    axs.plot(ts, ys, alpha=1, label=str(Qs[idx])+" quantile level" if c+pltnum == 0 else None)#color='r') #[p_x]+[ys[t] for t in range(wd)], label=str((idx+1)/10.))
                 prev = ys
-            axs[c].plot([p_t+j for j in range(0, wd+1)], np.concatenate([[xs[-1]], yt], axis=0), color='tab:blue', label="target" if c+pltnum == 0 else None)
+            axs.plot([p_t+j for j in range(0, 101)], np.concatenate([[xs[-1]], yt], axis=0), color='tab:blue', label="target" if c+pltnum == 0 else None)
             #axs[i, pltnum].set_axis_off()
     f.legend()
     #f.tight_layout()
     f.savefig("./ts.png")
     print('saved fig!')
 
+def getXY(loader):
+    X, Y = [], []
+    i = 0
+    for (x, y) in loader:
+        if i < 210 or i % 30 != 0:
+            i+=1
+            continue
+        X.append(x)
+        Y.append(y)
+        i += 1
+        print(i)
+        if i == 210 + N*5+1:
+            break
+        #return x.float(), y.float()
+    return torch.cat(X, 1).float(), torch.cat(Y, 1).float()
+
 def test(net, args, name, loader):
     net.eval()
-    X, Y = loader.dataset.getXY()
+    X, Y = getXY(loader)
+    print(X.shape, Y.shape)
+    #Y = Y.cuda()
     gauss = torch.distributions.normal.Normal(torch.tensor([0.]).cuda(), torch.tensor([1.]).cuda())
-    X = X.cuda()   
+    #X = X.cuda()   
     #X, Ytrue = X[:, :12, :], X[:, 12:, :]
-    wd = 11
     preds = []
-    Xt = X[:, :12, 27, None]
+    Xt = X[:, :30]
     '''
     for q in [0.5]:
         U = torch.ones(X.shape[0], args.dims)*q
@@ -121,9 +154,9 @@ def test(net, args, name, loader):
         U = gauss.icdf(U)
         for ti in range(wd):
             Y_hat, Yv = net.grad(U, Xt[:, ti:], onehot=False)
-            print(Yv[0, 27])#, Ytrue[0, ti, 27])
             #Xt = torch.cat([Xt, Y_hat.unsqueeze(1).detach()], axis=1)
-            Xt = torch.cat([Xt, Ytrue[:, ti].unsqueeze(1)], axis=1)
+            Xt = torch.cat([Xt, Y_hat[:, None].detach()], axis=1)
+            print(Xt.shape)
             #print(Xt.shape, Xt[:, ti+1:].shape)
     '''
 
@@ -132,16 +165,18 @@ def test(net, args, name, loader):
         U = U.cuda()
         U = gauss.icdf(U)
         tmp = []
-        for ti in range(wd):
+        Xc = Xt 
+        for ti in range(100):
             #print(Xt[0, ti, 27])
-            _, Yv = net(Xt)
-            print(Xt.shape)
-            Xt = torch.cat([Xt[:, 1:], Yv[:, None]], axis=1)
-            #Y_hat, Yv = net.grad(U, Xt[:, ti:-wd+ti], onehot=False)
-            tmp.append(Yv.unsqueeze(1))
+            #_, Yv = net.grad(U, Xt, onehot=False)
+            #Xt = torch.cat([Xt[:, 1:], Yv[:, None]], axis=1)
+            Y_hat, _ = net.grad(U, Xc, onehot=False)
+            #Xc = torch.cat([Xc[:, 1:], Y_hat[:, None].detach()], 1)
+            Xc = torch.cat([Xc[:, 1:], X[:, 30+ti, None]], 1)
+            tmp.append(Y_hat.unsqueeze(1))
         preds.append(torch.cat(tmp, axis=1))
     #preds = preds[:4] + [Xt[:, -3:]] + preds[4:]
-    plot_timeseries(X[:, :12], preds, 0, X[:, 12:], wd=wd)
+    plot_timeseries(X[:, :30], preds, 0, X[:, 30:130])
     '''
     epsilon = torch.abs(Y_hat - Y)
     ql = l1_quantile_loss(Y_hat, Y, U)
@@ -183,21 +218,25 @@ def train(net, optimizer, loaders, args):
     #net = net.float()
     for epoch in range(1, args.epoch+1):
         running_loss = 0.0
-        for idx, (X, Y) in tqdm(enumerate(train_loader), total=len(train_loader)):
+        for idx, (X, Y) in enumerate(train_loader):#for idx, (X, Y) in tqdm(enumerate(train_loader), total=len(train_loader)):
+            #X, Y = X[:, :N-wd], X[:, N-wd]
+            #X=X.float().cuda()
+            #Y=Y.float().cuda()
             u = unif(size=(args.batch_size, args.dims))
             u = gauss.icdf(u)
             optimizer.zero_grad()
-            y_norm, yv = net(X[:, :, 27, None]) #bn1(X)
-            #alpha, beta = net(u)
-            #loss = dual(U=u, Y_hat=(alpha, beta), Y=Y, X=y_norm, eps=args.eps)
-            loss = F.mse_loss(yv, Y)
+            y_norm, yv = net.f(X) #bn1(X)
+            alpha, beta = net(u)
+            loss = dual(U=u, Y_hat=(alpha, beta), Y=Y, X=y_norm, eps=args.eps)
+            #loss = F.mse_loss(yv, Y)
             loss.backward()
             optimizer.step()
-            #for p in positive_params:
-            #    p.data.copy_(torch.relu(p.data))
+            for p in positive_params:
+                p.data.copy_(torch.relu(p.data))
             running_loss += loss.item()
-        print('%.5f' %
-            (running_loss/(idx+1)))
+        if (epoch % (args.epoch//10)) == 0:
+            print('%.5f' %
+                (running_loss/(idx+1)))
         #validate(net, val_loader, args)
 
     test(net, args, name='imgs/trained.png', loader=test_loader)
@@ -224,6 +263,9 @@ if __name__ == "__main__":
     parser.add_argument('--eps', default=0, type=float)
     parser.add_argument('--quantile', default=0.5, type=float)
     parser.add_argument('--dataset', default='energy', type=str)
+    parser.add_argument('--folder', type=str)
+    parser.add_argument('--save_model', action='store_true')
+    parser.add_argument('--weights', default='', type=str)
     args = parser.parse_args()
 
     print("Input arguments:")
@@ -231,34 +273,64 @@ if __name__ == "__main__":
         print("{:16} {}".format(key, val))
 
     if args.dataset == 'energy':
-        xdim = 28
-        args.dims = 28
+        xdim = 1
+        args.dims = 1
 
     elif args.dataset == 'stock':
         xdim = 3 
         args.dims = 6
-    '''
+
     net = ConditionalConvexQuantile(xdim=xdim, 
                                     a_hid=128,
                                     a_layers=3,
                                     b_hid=128,
                                     b_layers=3,
                                     args=args)
+
+    data = load_data('./data/energydata_complete.csv')[['Appliances']]
+    data = data.copy()
+
+    # Plot Time-Series Data #
+    if False:
+        plot_full(args.plots_path, data, args.feature)
+
+    data['Appliances'] = scaler.fit_transform(data)
+
+    # Split the Dataset #
+    copied_data = data.copy().values
+
+    #del data
+    #data = None
+
+    if False:
+        X, y = split_sequence_multi_step(copied_data, N, 1)
+        step = 'MultiStep'
+    else:
+        X, y = split_sequence_uni_step(copied_data, N)
+        step = 'SingleStep'
+
+    train_loader, val_loader, test_loader = data_loader(X, y, 0.8, 0.5, args.batch_size)
     '''
     net = BiRNN(input_size=1,
                    hidden_size=64,#args.dims*4,
                    num_layers=3,
                    xdim=1)
-
+    '''
     for p in list(net.parameters()):
         if hasattr(p, 'be_positive'):
             positive_params.append(p)
         p.data = torch.from_numpy(truncated_normal(p.shape, threshold=1./np.sqrt(p.shape[1] if len(p.shape)>1 else p.shape[0]))).float()
 
+    if len(args.weights) > 0:
+        load(net, args.weights + '/net.pth')
+
     ds = [TimeSeriesDataset(dataset=args.dataset, device=device, split=x) for x in ['train', 'val', 'train']]
-    loaders = [data.DataLoader(d, batch_size=args.batch_size, shuffle=False, drop_last=True) for d in ds]
+    #loaders = [data.DataLoader(d, batch_size=args.batch_size, shuffle=False, drop_last=True) for d in ds]
     optimizer = optimizer(net, args)
     net.to(device)
-    train(net, optimizer, loaders, args)
+    train(net, optimizer, [train_loader, val_loader, test_loader], args)
+    
+    if args.save_model:
+        save(net, args.folder, 'net')
 
     print("Training completed!")

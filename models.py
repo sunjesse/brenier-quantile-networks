@@ -64,23 +64,48 @@ class BiRNN(nn.Module):
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.bn_last = bn_last
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, bidirectional=True)
-        self.fc = nn.Linear(hidden_size*2, xdim)
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, bidirectional=False)
+        self.fc = nn.Linear(hidden_size, xdim)
         self.norm = nn.BatchNorm1d(xdim, momentum=1.0, affine=False)
     
     def forward(self, x):
         # Set initial states
-        h0 = torch.zeros(self.num_layers*2, x.size(0), self.hidden_size).to(device) # 2 for bidirection 
-        c0 = torch.zeros(self.num_layers*2, x.size(0), self.hidden_size).to(device)
-        
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(device) # 2 for bidirection 
+        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(device)
         # Forward propagate LSTM
         out, _ = self.lstm(x, (h0, c0))  # out: tensor of shape (batch_size, seq_length, hidden_size*2)
         
         # Decode the hidden state of the last time step
         out = self.fc(out[:, -1, :])
         if self.bn_last:
-            return self.norm(out)
+            return self.norm(out), out
         return out
+
+class ShallowRegressionLSTM(nn.Module):
+    def __init__(self, num_sensors, hidden_units):
+        super().__init__()
+        self.num_sensors = num_sensors  # this is the number of features
+        self.hidden_units = hidden_units
+        self.num_layers = 1
+
+        self.lstm = nn.LSTM(
+            input_size=num_sensors,
+            hidden_size=hidden_units,
+            batch_first=True,
+            num_layers=self.num_layers
+        )
+
+        self.linear = nn.Linear(in_features=self.hidden_units, out_features=num_sensors)
+
+    def forward(self, x):
+        batch_size = x.shape[0]
+        h0 = torch.zeros(self.num_layers, batch_size, self.hidden_units).to(device).requires_grad_()
+        c0 = torch.zeros(self.num_layers, batch_size, self.hidden_units).to(device).requires_grad_()
+
+        _, (hn, _) = self.lstm(x, (h0, c0))
+        out = self.linear(hn[0])  # First dim of Hn is num_layers, which is set to 1 above.
+        print(out.shape)
+        return None, out
 
 class Spline(nn.Module):
     def __init__(self, args):
@@ -339,10 +364,11 @@ class ConditionalConvexQuantile(nn.Module):
             # BiRNN
         '''
         self.f = BiRNN(input_size=args.dims,
-                       hidden_size=args.dims*4,
-                       num_layers=2,
+                       hidden_size=512,#args.dims*4,
+                       num_layers=1,
                        xdim=self.xdim)
-            # MLP
+        #self.f = ShallowRegressionLSTM(1, 128)
+        # MLP
 
         #self.bn1 = nn.BatchNorm1d(self.xdim, momentum=1.0, affine=False)
 
@@ -361,13 +387,13 @@ class ConditionalConvexQuantile(nn.Module):
         if onehot and self.xdim > 0:
             x = self.to_onehot(x)
         elif x != None:
-            x = self.f(x)#self.bn1(x)
+            x, xv = self.f(x)#self.bn1(x)
         u.requires_grad = True 
         phi = self.alpha(u).sum()
         if self.xdim != 0 and x != None:
             phi += (torch.bmm(self.beta(u).unsqueeze(1), x.unsqueeze(-1)).squeeze(-1)).sum()
         d_phi = torch.autograd.grad(phi, u, create_graph=True)[0]
-        return d_phi
+        return d_phi, xv
 
     def grad_multi(self, u, x):
         if x == None:

@@ -58,7 +58,7 @@ class Synthetic(data.Dataset):
         x = torch.from_numpy(self.x[i]).float().to(device)
         return x.unsqueeze(-1), y
 
-def mix_norm_cdf(weights, means, covars, n=10000, plot=True):
+def mix_norm_cdf(weights, means, covars, n=10000, plot=False):
     np.random.seed(0)
     means = np.expand_dims(np.array(means), 1)
     covars = np.expand_dims(np.array(covars), 1)
@@ -76,14 +76,20 @@ def mix_norm_cdf(weights, means, covars, n=10000, plot=True):
         return ys, xs
 
 def plotaxis(Y1, Y2, Y3):
-    plt.plot(np.linspace(0, 1, len(Y1), endpoint=False), Y1, label='OT (Ours)')
-    plt.plot(np.linspace(0, 1, len(Y2), endpoint=False), Y2, label='IQN')
-    plt.plot(np.linspace(0, 1, len(Y3), endpoint=False), Y3, label='Spline RNN')
+    f, axs = plt.subplots(1, 3, figsize=(12, 3), sharey=True)
+    axs[2].plot(np.linspace(0, 1, len(Y1), endpoint=False), Y1, label='OT (Ours)')
+    axs[1].plot(np.linspace(0, 1, len(Y2), endpoint=False), Y2, label='IQN')
+    axs[0].plot(np.linspace(0, 1, len(Y3), endpoint=False), Y3, label='Spline RNN')
     #plt.plot(X, Y1, label='OT (Ours)')
     #plt.plot(X, Y2, label='Huber')
-    mix_norm_cdf(weights=[.3, .4, .3], means=[-3., 0., 3.], covars=[.4, .4, .4])
-    plt.legend()
-    plt.savefig('./imgs/quantiles.png')	
+    ys, xs = mix_norm_cdf(weights=[.3, .4, .3], means=[-3., 0., 3.], covars=[.4, .4, .4])
+    axs[0].plot(ys, xs, '--', label='Theoretical')
+    axs[1].plot(ys, xs, '--', label='Theoretical')
+    axs[2].plot(ys, xs, '--', label='Theoretical')
+    axs[0].legend()
+    axs[1].legend()
+    axs[2].legend()
+    plt.savefig('./quantiles.png')	
 
 def gaussian_mixture(means, stds, p, args):
     assert np.sum(p) == 1
